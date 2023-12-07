@@ -85,7 +85,7 @@ public class CentralNode {
                 self.event = Event.values()[Integer.parseInt(state)];
                 self.peerExpiry = System.currentTimeMillis() + 2 * HEARTBEAT;
             }
-            return self.execute() ? 0 : -1;
+            return self.bstar_state_machine() ? 0 : -1;
         }
     };
 
@@ -152,7 +152,7 @@ public class CentralNode {
         
         this.loop.addTimer(HEARTBEAT, 0, this.SendStateToPeer , this);
         PollItem poller = new PollItem(this.statesub, ZMQ.Poller.POLLIN);
-        this.loop.addPoller(poller, this.handler.handlerReceiveStateFromPeer(), this);
+        this.loop.addPoller(poller, RecvStateFromPeer, this);
         // End of binary star setup
 
         this.port = port;
