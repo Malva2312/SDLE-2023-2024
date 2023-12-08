@@ -133,10 +133,10 @@ public class Node {
         this.tokenAddrsMap.put(new_token, new_addr);
     }
 
-    public Node(int port, Long token, String addr) {
+    public Node(int port, Long token) {
         this.port = port;
         this.token = (Long) token;
-        this.addr = (String) addr;
+        this.addr = new String(String.format("tcp://*:%d", port));
 
 
         ctx = new ZContext();
@@ -178,16 +178,15 @@ public class Node {
     }
 
     public static void main(String[] args) {
-        // args should be: -p <port> -t <token> -a <address>
+        // args should be: -p <port> -t <token>
         // args could be empty, then default values will be used
         // args could be in any order
 
-        if (args.length <= 0 && args.length % 2 != 0 && args.length > 6) {
+        if (args.length <= 0 && args.length % 2 != 0 && args.length > 4) {
             System.out.println("Wrong arguments");
             return;
         }
         long token = 42;
-        String addr = "dummy_addr";
         int port = 0;
 
         int i;
@@ -198,9 +197,6 @@ public class Node {
             else if (args[i].equals("-t")) {
                 token = Long.parseLong(args[i + 1]);
             }
-            else if (args[i].equals("-a")) {
-                addr = args[i + 1];
-            }
             else {
                 System.out.println("Wrong arguments");
                 return;
@@ -208,9 +204,9 @@ public class Node {
         }
         // System.out.println("Self Port: " + port);
         System.out.println("Token: " + token);
-        System.out.println("Addr: " + addr);
+        System.out.println("Addr: " + String.format("tcp://*:%d", port));
 
-        Node node = new Node(port,token, addr);
+        Node node = new Node(port,token);
         node.run();
     }
 }
