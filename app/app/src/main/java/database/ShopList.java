@@ -1,4 +1,4 @@
-package app;
+package database;
 
 import java.util.HashMap;
 import java.time.Instant;
