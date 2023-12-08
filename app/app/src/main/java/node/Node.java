@@ -5,23 +5,31 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import org.zeromq.SocketType;
 import org.zeromq.ZContext;
+import org.zeromq.ZLoop;
 import org.zeromq.ZMQ;
-import org.zeromq.ZMQ.Poller;
+import org.zeromq.ZLoop.IZLoopHandler;
+import org.zeromq.ZMQ.PollItem;
 import org.zeromq.ZMQ.Socket;
 
 
 public class Node {
     private final static int MAIN_NODE_PORT = 5556;
-
+    
     private final static String REQ_SNAPSHOT = "ALLNODES?";
     private final static String REP_SNAPSHOT = "REPNODESSNAP";
-
+    
     private final static String SUB_NODES = "/NODE/";
     private final static String FLUSH_SIGNAL = "/FLUSH/";
     
     private final static int HEARTBEAT = 5 * 1000; //  msecs
+    
+    private final int alarm = 5 * 1000; //  msecs
+    private final boolean show_stats = false;
+    private final boolean time_stats = false;
 
     private ZContext ctx;
+    private ZLoop loop;
+
     Socket snapshot;    // Request Snapshot from MainNode
     Socket subscriber;  // Subscribe to all updates from MainNode
     Socket publisher;   // Publish updates to MainNode
@@ -31,7 +39,67 @@ public class Node {
     String addr;
     private ConcurrentHashMap<Long, String> tokenAddrsMap;
 
-    private final boolean time_stats = false;
+
+    private static class receiveUpdate implements IZLoopHandler{
+        @Override
+        public int handle(ZLoop loop, PollItem item, Object arg) {
+
+            Node node = (Node) arg;
+
+            kvmsg kvMsg = kvmsg.recv(node.subscriber);
+            if (kvMsg == null)
+                return -1; //  Interrupted
+            
+            if (kvMsg.getSequence() > 0) {
+                if (kvMsg.getKey().startsWith(SUB_NODES + FLUSH_SIGNAL)){
+                    Long old_key = Long.parseLong(kvMsg.getKey().substring((SUB_NODES + FLUSH_SIGNAL).length()));
+                    node.tokenAddrsMap.remove(old_key);
+                } 
+                else if (kvMsg.getKey().startsWith(SUB_NODES)) {
+                    System.out.println("Received update " + kvMsg.getKey());
+                    node.storeTokenAddrsMap(kvMsg, SUB_NODES);
+                }
+                else {
+                    System.out.println("E: bad request, aborting");
+                    return -1;
+                }
+            }
+            else {
+                kvMsg.destroy();
+            }
+
+            return 0;
+        }
+    }
+
+    private static class sendHeartBeat implements IZLoopHandler {
+        @Override
+        public int handle(ZLoop loop, PollItem item, Object arg) {
+            Node node = (Node) arg;
+
+            kvmsg kvMsg = new kvmsg(0);
+            kvMsg.fmtKey("%s%d", SUB_NODES, node.token);
+            kvMsg.fmtBody("%s", node.addr);
+            kvMsg.setProp("ttl", "%d", HEARTBEAT * 2);
+            kvMsg.send(node.publisher);
+            kvMsg.destroy();
+
+            return 0;
+        }
+    }
+
+    private static class printStatus implements IZLoopHandler {
+        @Override
+        public int handle(ZLoop loop, PollItem item, Object arg) {
+            Node node = (Node) arg;
+            System.out.println("\nChecking tokenAddrsMap");
+            for (Long token : node.tokenAddrsMap.keySet()) {
+                String addr = node.tokenAddrsMap.get(token);
+                System.out.printf("Token: %d, Addr: %s\n", token, addr);
+            }
+            return 0;
+        }
+    }
 
     private void requestSnapshot() {
         // get state snapshot
@@ -45,6 +113,8 @@ public class Node {
             }
 
             long sequence = kvMsg.getSequence();
+            if (show_stats)
+                System.out.printf("I: received snapshot=%d\n", sequence);
             // Check if snapshot is complete
             if (REP_SNAPSHOT.equalsIgnoreCase(kvMsg.getKey())) {
                 kvMsg.destroy();
@@ -54,55 +124,6 @@ public class Node {
             storeTokenAddrsMap(kvMsg, SUB_NODES);
         }
         // End of snapshot request
-    }
-
-    private int processUpdate(Poller poller){
-        long start_time = System.currentTimeMillis();
-
-        // Process updates from MainNode
-            if (poller.pollin(0)) {
-                kvmsg kvMsg = kvmsg.recv(subscriber);
-                if (kvMsg == null)
-                    return -1; //  Interrupted
-            
-                if (kvMsg.getSequence() > 0) {
-                    if (kvMsg.getKey().startsWith(SUB_NODES)) {
-                        System.out.println("Received update " + kvMsg.getKey());
-                        if (kvMsg.getKey().startsWith(SUB_NODES + FLUSH_SIGNAL)) {
-                            System.out.println("FLUSH_SIGNAL");
-                            Long old_key = Long.parseLong(kvMsg.getKey().substring((SUB_NODES + FLUSH_SIGNAL).length()));
-                            tokenAddrsMap.remove(old_key);
-                        }
-                        else {
-                            storeTokenAddrsMap(kvMsg, SUB_NODES);
-                        }
-                    }
-                } else {
-                    kvMsg.destroy();
-                }
-            }
-
-        if (time_stats) {
-            long end_time = System.currentTimeMillis();
-            System.out.printf("processUpdate: %d\n", (end_time - start_time) / 1000);
-        }
-        return 0;
-    }
-    
-    private Long sendUpdate(long alarm){
-
-        if (System.currentTimeMillis() >= alarm) {
-            kvmsg kvMsg = new kvmsg(0);
-            kvMsg.fmtKey("%s%d", SUB_NODES, token);
-            kvMsg.fmtBody("%s", addr);
-            kvMsg.setProp("ttl", "%d", HEARTBEAT * 2);
-            kvMsg.send(publisher);
-            kvMsg.destroy();
-
-            alarm = System.currentTimeMillis() + HEARTBEAT;
-        }
-        return alarm;
-        
     }
 
     private void storeTokenAddrsMap(kvmsg kvMsg, String subtree){
@@ -119,6 +140,10 @@ public class Node {
 
 
         ctx = new ZContext();
+        loop = new ZLoop(ctx);
+        loop.verbose(false);
+
+
         snapshot = ctx.createSocket(SocketType.DEALER);
         snapshot.connect("tcp://localhost:" + MAIN_NODE_PORT);
 
@@ -136,37 +161,20 @@ public class Node {
         
         requestSnapshot();
 
-        Poller poller = ctx.createPoller(1);
-        poller.register(subscriber, Poller.POLLIN);
+        PollItem poller = new PollItem(subscriber, ZMQ.Poller.POLLIN);
+        loop.addPoller(poller, new receiveUpdate(), this);
 
-        long alarm = System.currentTimeMillis();
-        long check_status = System.currentTimeMillis();
 
-        while (!Thread.currentThread().isInterrupted()) {
-            
-            int rc = poller.poll(
-                Math.max(0, alarm - System.currentTimeMillis())
-            );
-            if (rc == -1)
-                break; //  Context has been shut down
-            
-            if (processUpdate(poller) == -1)
-                break; //  Context has been shut down
-         
-
-            // Pass the reference of the alarm to sendUpdate
-            alarm = sendUpdate(alarm);
-
-            if (System.currentTimeMillis() >= check_status){
-                // Check pairs of tokens and addresses
-                System.out.println("\nChecking tokenAddrsMap");
-                for (Long token : tokenAddrsMap.keySet()) {
-                    String addr = tokenAddrsMap.get(token);
-                    System.out.printf("Token: %d, Addr: %s\n", token, addr);
-                }
-                check_status = System.currentTimeMillis() + 5000;
-            }
+        loop.addTimer(HEARTBEAT, 0, new sendHeartBeat(), this);
+        if (time_stats){
+            loop.addTimer(alarm, 0, new printStatus(), this);
         }
+
+
+        loop.start();
+
+        ctx.close();
+
     }
 
     public static void main(String[] args) {
