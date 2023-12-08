@@ -3,29 +3,29 @@ package database;
 import java.util.HashMap;
 
 public class KeyValueDatabase {
-    private HashMap<String, Object> database;
+    private HashMap<Long, Object> database;
 
     public KeyValueDatabase() {
         this.database = new HashMap<>();
     }
 
     // Put a key-value pair into the database
-    public void put(String key, Object value) {
+    public void put(Long key, Object value) {
         database.put(key, value);
     }
 
     // Get the value associated with a key
-    public Object get(String key) {
+    public Object get(Long key) {
         return database.get(key);
     }
 
     // Remove a key-value pair from the database
-    public void remove(String key) {
+    public void remove(Long key) {
         database.remove(key);
     }
 
     // Check if the database contains a key
-    public boolean containsKey(String key) {
+    public boolean containsKey(Long key) {
         return database.containsKey(key);
     }
 
@@ -43,22 +43,29 @@ public class KeyValueDatabase {
         // Example usage
         KeyValueDatabase kvdb = new KeyValueDatabase();
 
+        // Keys
+        Long key1 = (long) 1;
+        Long key2 = (long) 2;
+        Long key3 = (long) 3;
+        Long key4 = (long) 4;
+
+
         // Put key-value pairs
-        kvdb.put("name", "John");
-        kvdb.put("age", 25);
-        kvdb.put("city", "ExampleCity");
+        kvdb.put( key1, "John");
+        kvdb.put( key2, 25);
+        kvdb.put( key3, "ExampleCity");
 
         // Get values by keys
-        System.out.println("Name: " + kvdb.get("name"));
-        System.out.println("Age: " + kvdb.get("age"));
-        System.out.println("City: " + kvdb.get("city"));
+        System.out.println("Name: " + kvdb.get(key1));
+        System.out.println("Age: " + kvdb.get(key2));
+        System.out.println("City: " + kvdb.get(key3));
 
         // Check if a key exists
-        System.out.println("Contains key 'name': " + kvdb.containsKey("name"));
-        System.out.println("Contains key 'gender': " + kvdb.containsKey("gender"));
+        System.out.println("Contains key 'name': " + kvdb.containsKey(key1));
+        System.out.println("Contains key 'gender': " + kvdb.containsKey(key4));
 
         // Remove a key-value pair
-        kvdb.remove("age");
+        kvdb.remove(key2);
         System.out.println("After removing 'age', size: " + kvdb.size());
 
         // Clear the database
