@@ -23,9 +23,9 @@ public class Node {
     
     private final static int HEARTBEAT = 5 * 1000; //  msecs
     
-    private final int alarm = 5 * 1000; //  msecs
-    private final boolean show_stats = false;
-    private final boolean time_stats = false;
+    private final int alarm = 2 * 1000; //  msecs
+    private final boolean show_stats = true;
+    private final boolean time_stats = true;
 
     private ZContext ctx;
     private ZLoop loop;
