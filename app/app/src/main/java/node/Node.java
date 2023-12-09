@@ -32,6 +32,7 @@ public class Node {
 
     private final static int HEARTBEAT = 5 * 1000; // msecs
     private final static int TTL = 2 * HEARTBEAT; // msecs
+    private final static int REP_TIMEOUT = 5 * 1000; // msecs
 
     private final static int alarm = 2 * 1000; // msecs
     private final static boolean show_stats = true;
@@ -138,7 +139,10 @@ public class Node {
         snapshot.sendMore(REQ_SNAPSHOT);
         snapshot.send(SUB_NODES);
 
-        while (true) { // Wait for snapshot
+        // Set timeout
+        Long timeOut = System.currentTimeMillis() + REP_TIMEOUT;
+
+        while (System.currentTimeMillis() > timeOut) { // Wait for snapshot
             kvmsg kvMsg = kvmsg.recv(snapshot);
             if (kvMsg == null) {
                 break; // Interrupted
@@ -150,11 +154,13 @@ public class Node {
             // Check if snapshot is complete
             if (REP_SNAPSHOT.equalsIgnoreCase(kvMsg.getKey())) {
                 kvMsg.destroy();
-                break; // done
+                return;
             }
 
             storeTokenAddrsMap(kvMsg, SUB_NODES);
         }
+        System.out.println("E: failed to receive snapshot from broker, aborting");
+
         // End of snapshot request
     }
 
