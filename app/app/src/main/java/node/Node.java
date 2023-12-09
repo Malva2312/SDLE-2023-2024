@@ -281,7 +281,8 @@ public class Node {
             kvmsg request = kvmsg.recv(socket);
             if (request == null)
                 return -1; // Interrupted
-
+            if (!request.getKey().startsWith(SNDR_CLIENT))
+                return -1; //
             if (request.getKey().equals(READ_REQ)) {
                 fowardReadRequest(node, socket, identity, request);
             } else if (request.getKey().equals(WRITE_REQ)) {
@@ -301,7 +302,7 @@ public class Node {
             request.send(dealer);
 
             int read_count = 0;
-            int read_quorum = node.readQuorum;
+            int read_quorum = node.getReadQuorum();
 
             Long timeout = System.currentTimeMillis() + REP_TIMEOUT;
             boolean rcv_self = false;
@@ -361,15 +362,17 @@ public class Node {
             socket.sendMore(identity);
             response.send(socket);
 
-            for (Entry<String, Item> entry : bestShopList.getItems().entrySet()) {
-                kvmsg r_item = new kvmsg(0);
-                r_item.setKey(READ_REP + db_key);
-                r_item.setProp("sender", node.getToken().toString());
-                r_item.setProp("item", entry.getKey());
-                r_item.setProp("quantity", Integer.toString(entry.getValue().getQuantity()));
-
-                socket.sendMore(identity);
-                r_item.send(socket);
+            if (bestShopList != null){
+                for (Entry<String, Item> entry : bestShopList.getItems().entrySet()) {
+                    kvmsg r_item = new kvmsg(0);
+                    r_item.setKey(READ_REP + db_key);
+                    r_item.setProp("sender", node.getToken().toString());
+                    r_item.setProp("item", entry.getKey());
+                    r_item.setProp("quantity", Integer.toString(entry.getValue().getQuantity()));
+    
+                    socket.sendMore(identity);
+                    r_item.send(socket);
+                }
             }
 
             kvmsg r_end = new kvmsg(0);
@@ -403,7 +406,7 @@ public class Node {
 
             // Receive response from nodes
             int write_count = 0;
-            int write_quorum = node.writeQuorum;
+            int write_quorum = node.getWriteQuorum();
         
             Long timeout = System.currentTimeMillis() + REP_TIMEOUT;
 
@@ -438,6 +441,14 @@ public class Node {
             dealer.connect("tcp://localhost:" + port + 1);
         }
         return this.dealer;
+    }
+
+    public int getWriteQuorum() {
+        return writeQuorum;
+    }
+
+    public int getReadQuorum() {
+        return readQuorum;
     }
 
     public List<Integer> nextNodeAddr() {
