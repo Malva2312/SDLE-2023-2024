@@ -47,7 +47,7 @@ public class Node {
 
     // ----------------------------------------------
     private ConcurrentHashMap<Long, Integer> tokenAddrsMap;
-    
+
     // ----------------------------------------------
     // Node interaction for database requests
     private final static String SNDR_CLIENT = "/CLIENT/";
@@ -59,10 +59,9 @@ public class Node {
     private final static String WRITE_REP = "WRITEREP";
     private final static String END_OF_MESSAGE = "ENDOFMESSAGE";
 
-
     private int port;
     private Long token;
-    
+
     private static int replicationFactor = 3;
     private static int readQuorum = 2;
     private static int writeQuorum = 2;
@@ -186,21 +185,19 @@ public class Node {
             if (request == null)
                 return -1; // Interrupted
             String sender = request.getProp("sender");
-            if (!sender.equals(SNDR_NODE))    
+            if (!sender.equals(SNDR_NODE))
                 return -1; //
-            
-            if (request.getKey().equals(READ_REQ)){
+
+            if (request.getKey().equals(READ_REQ)) {
                 String db_key = request.getProp("db_key");
                 kvmsg response = new kvmsg(0);
-                ShopList shopList 
-                    = node.kvdb.containsKey(db_key) ? (ShopList) node.kvdb.get(db_key) : new ShopList();
-                
+                ShopList shopList = node.kvdb.containsKey(db_key) ? (ShopList) node.kvdb.get(db_key) : new ShopList();
+
                 response.setKey(READ_REP);
                 response.setProp("sender", node.getToken().toString());
                 response.setProp("db_key", db_key);
                 response.setProp("timestamp", shopList.getTimeStamp());
 
-                
                 socket.sendMore(identity);
                 response.send(socket);
 
@@ -217,33 +214,32 @@ public class Node {
 
                 kvmsg r_end = new kvmsg(0);
                 r_end.setKey(END_OF_MESSAGE + db_key);
-                
+
                 socket.sendMore(identity);
                 r_end.send(socket);
 
                 response.destroy();
                 r_end.destroy();
-            }
-            else if (request.getKey().equals(WRITE_REQ)){
+            } else if (request.getKey().equals(WRITE_REQ)) {
                 String db_key = request.getProp("db_key");
                 Instant timestamp = Instant.parse(request.getProp("timestamp"));
 
                 String deleter = request.getProp("delete");
-                if (deleter.equals("true")){
+                if (deleter.equals("true")) {
                     node.kvdb.remove(db_key);
                     return 0;
                 }
-                ShopList shopList = node.kvdb.containsKey(db_key) ?(ShopList) (node.kvdb.get(db_key)) : new ShopList();
+                ShopList shopList = node.kvdb.containsKey(db_key) ? (ShopList) (node.kvdb.get(db_key)) : new ShopList();
                 ShopList copy = shopList.copy();
 
-                if (shopList.getInstant().isBefore(timestamp)){
+                if (shopList.getInstant().isBefore(timestamp)) {
                     shopList.setTimeStamp(timestamp);
 
                     while (true) {
                         kvmsg rc_item = kvmsg.recv(socket);
                         if (item == null)
                             return -1; // Interrupted
-                        if (rc_item.getKey().equals(END_OF_MESSAGE + db_key)){
+                        if (rc_item.getKey().equals(END_OF_MESSAGE + db_key)) {
                             node.kvdb.put(db_key, copy);
 
                             kvmsg response = new kvmsg(0);
@@ -255,24 +251,21 @@ public class Node {
                             response.send(socket);
                             response.destroy();
                             break;
-                        }
-                        else if (rc_item.getKey().equals(WRITE_REQ + db_key)){
+                        } else if (rc_item.getKey().equals(WRITE_REQ + db_key)) {
                             String item_name = rc_item.getProp("item");
                             int item_quantity = Integer.parseInt(rc_item.getProp("quantity"));
                             copy.addItem(item_name, item_quantity);
-                        }
-                        else {
+                        } else {
                             System.out.println("E: bad request, aborting");
                             return -1;
                         }
                     }
                 }
-            }
-            else {
+            } else {
                 System.out.println("E: bad request, aborting");
                 return -1;
             }
-            
+
             return 0;
         }
     }
@@ -282,90 +275,176 @@ public class Node {
         public int handle(ZLoop loop, PollItem item, Object arg) {
 
             Node node = (Node) arg;
-            Socket socket = item.getSocket();
+            Socket socket = item.getSocket(); // Router socket
 
             byte[] identity = socket.recv();
             kvmsg request = kvmsg.recv(socket);
             if (request == null)
                 return -1; // Interrupted
 
-            String sender = request.getProp("sender");
-            if (!sender.equals(SNDR_CLIENT))    
-                return -1; //
-
-            if (request.getKey().equals(READ_REQ)){
-                Socket dealer = node.updateDealer();
-                request.setProp("sender", SNDR_NODE);
-                // Send requent to replicationFactor nodes
-                request.send(dealer);
-
-                // Must receive response from readQuorum nodes
-                // Response of self node is mandatory
-
-                Boolean self_response = false;
-                int n_responses = 0;
-                while (n_responses < readQuorum && !self_response){ // Maybe add timeout
-                    n_responses++;
-                    // Choose which node to receive from
-                }
-            }
-            else if (request.getKey().equals(WRITE_REQ)){
-                Socket dealer = node.updateDealer();
-                request.setProp("sender", SNDR_NODE);
-                // Send requent to replicationFactor nodes
-                request.send(dealer);
-
-                // Must receive response from writeQuorum nodes
-                // Response of self node not is mandatory
-
-                int n_responses = 0;
-                while (n_responses < writeQuorum){ // Maybe add timeout
-                    kvmsg response = kvmsg.recv(dealer);
-                    if (response == null) {
-                        return -1; // Interrupted
-                    }
-                    if (response.getKey().equals(WRITE_REP)){
-                        if (response.getProp("status").equals("OK")){
-                            n_responses++;
-                        }
-                    }
-                    else {
-                        System.out.println("E: bad request, aborting");
-                        return -1;
-                    }
-                }
-                kvmsg response = new kvmsg(0);
-                response.setKey(WRITE_REP);
-                response.setProp("status", "OK");
-
-                socket.sendMore(identity);
-                response.send(socket);
-                response.destroy();
-            }
-            else {
+            if (request.getKey().equals(READ_REQ)) {
+                fowardReadRequest(node, socket, identity, request);
+            } else if (request.getKey().equals(WRITE_REQ)) {
+                fowardWriteRequest(node, socket, identity, request);
+            } else {
                 System.out.println("E: bad request, aborting");
                 return -1;
             }
             return 0;
         }
+
+        private void fowardReadRequest(Node node, Socket socket, byte[] identity, kvmsg request) {
+
+            request.setProp("sender", SNDR_NODE);
+            request.setProp("db_key", request.getProp("db_key"));
+            Socket dealer = node.updateDealer();
+            request.send(dealer);
+
+            int read_count = 0;
+            int read_quorum = node.readQuorum;
+
+            Long timeout = System.currentTimeMillis() + REP_TIMEOUT;
+            boolean rcv_self = false;
+            String db_key = "";
+
+            List<ShopList> shopLists = new ArrayList<>();
+            ShopList shopList = null;
+
+            while (System.currentTimeMillis() < timeout && read_count < read_quorum && !rcv_self) {
+                kvmsg rcv = kvmsg.recv(node.dealer);
+                if (rcv == null)
+                    continue; // Interrupted
+                if (rcv.getKey().equals(READ_REP)) {
+                    if (rcv.getProp("sender").equals(node.getToken().toString())) {
+                        rcv_self = true;
+                    }
+                    db_key = rcv.getProp("db_key");
+                    String timestamp = rcv.getProp("timestamp");
+                    shopList = new ShopList();
+                    shopList.setTimeStamp(Instant.parse(timestamp));
+
+                } else if (rcv.getKey().equals(READ_REP + db_key)) {
+                    String item_name = rcv.getProp("item");
+                    int item_quantity = Integer.parseInt(rcv.getProp("quantity"));
+                    if (shopList != null) {
+                        shopList.addItem(item_name, item_quantity);
+                    }
+                } else if (rcv.getKey().equals(END_OF_MESSAGE + db_key)) {
+                    if (shopList != null) {
+                        shopLists.add(shopList);
+                    }
+                    read_count++;
+                } else {
+                    System.out.println("E: bad request, aborting");
+                    continue;
+                }
+            }
+
+            // Choose the best shop list or combine them
+            ShopList bestShopList = null;
+            for (ShopList sl : shopLists) {
+                if (bestShopList == null) {
+                    bestShopList = sl;
+                } else {
+                    if (sl.getInstant().isAfter(bestShopList.getInstant())) {
+                        bestShopList = sl;
+                    }
+                }
+            }
+
+            // Send response to client
+            kvmsg response = new kvmsg(0);
+            response.setKey(READ_REP);
+            response.setProp("sender", node.getToken().toString());
+            response.setProp("db_key", db_key);
+
+            socket.sendMore(identity);
+            response.send(socket);
+
+            for (Entry<String, Item> entry : bestShopList.getItems().entrySet()) {
+                kvmsg r_item = new kvmsg(0);
+                r_item.setKey(READ_REP + db_key);
+                r_item.setProp("sender", node.getToken().toString());
+                r_item.setProp("item", entry.getKey());
+                r_item.setProp("quantity", Integer.toString(entry.getValue().getQuantity()));
+
+                socket.sendMore(identity);
+                r_item.send(socket);
+            }
+
+            kvmsg r_end = new kvmsg(0);
+            r_end.setKey(END_OF_MESSAGE + db_key);
+
+            socket.sendMore(identity);
+            r_end.send(socket);
+        }
+
+        private static void fowardWriteRequest(Node node, Socket socket, byte[] identity, kvmsg request) {
+            Socket dealer = node.updateDealer();
+            while (request.getKey().startsWith(WRITE_REQ)) {
+                request.setProp("sender", SNDR_NODE);
+                dealer.sendMore(identity);
+                request.send(dealer);
+
+                kvmsg rcv = kvmsg.recv(dealer);
+                if (rcv == null)
+                    return; // Interrupted
+            }
+            // End of write request
+            if (request.getKey().startsWith(END_OF_MESSAGE)) {
+                request.setProp("sender", SNDR_NODE);
+                dealer.sendMore(identity);
+                request.send(dealer);
+            }
+            else {
+                System.out.println("E: bad request, aborting");
+                return;
+            }
+
+            // Receive response from nodes
+            int write_count = 0;
+            int write_quorum = node.writeQuorum;
+        
+            Long timeout = System.currentTimeMillis() + REP_TIMEOUT;
+
+            while (System.currentTimeMillis() < timeout && write_count < write_quorum) {
+                kvmsg rcv = kvmsg.recv(dealer);
+                if (rcv == null)
+                    continue; // Interrupted
+                if (rcv.getKey().equals(WRITE_REP)) {
+                    if (rcv.getProp("status").equals("OK")) {
+                        write_count++;
+                    }
+                }
+            }
+            if (write_count == write_quorum) {
+                kvmsg response = new kvmsg(0);
+                response.setKey(WRITE_REP);
+                response.setProp("sender", node.getToken().toString());
+                response.setProp("status", "OK");
+
+                socket.sendMore(identity);
+                response.send(socket);
+            }
+        }
     };
 
     // ----------------------------------------------
-    public Socket updateDealer(){
+    public Socket updateDealer() {
         // Update dealer socket
         dealer.close();
         dealer = ctx.createSocket(SocketType.DEALER);
-        for (int port : nextNodeAddr()){
+        for (int port : nextNodeAddr()) {
             dealer.connect("tcp://localhost:" + port + 1);
         }
         return this.dealer;
     }
-    public List<Integer> nextNodeAddr(){
+
+    public List<Integer> nextNodeAddr() {
         List<Integer> addrs = new ArrayList<>();
-        if (tokenAddrsMap.size() < getReplicationFactor()){
+        if (tokenAddrsMap.size() < getReplicationFactor()) {
             addrs.add(port + 1);
-        }
-        else {
+        } else {
             List<Long> ringKeys = new ArrayList<>(tokenAddrsMap.keySet());
             int keyIndex = ringKeys.indexOf(token);
 
@@ -379,6 +458,7 @@ public class Node {
         }
         return addrs;
     }
+
     private int getReplicationFactor() {
         return replicationFactor;
     }
@@ -386,6 +466,7 @@ public class Node {
     public int getPort() {
         return port;
     }
+
     public Long getToken() {
         return token;
     }
@@ -425,7 +506,6 @@ public class Node {
         // ----------------------------------------------
     }
 
-    
     private static class node_worker implements Runnable {
         Socket node_router;
         ZLoop loop;
@@ -442,7 +522,6 @@ public class Node {
             loop.start();
         }
     }
-
 
     public void run() {
 

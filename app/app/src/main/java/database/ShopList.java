@@ -11,7 +11,7 @@ public class ShopList {
 
     public ShopList() {
         this.items = new HashMap<String, Item>();
-        this.lastUpdated = Instant.now();
+        //this.lastUpdated = Instant.now();
     }
 
     public ShopList copy(){
