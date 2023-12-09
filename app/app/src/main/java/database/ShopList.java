@@ -11,7 +11,7 @@ public class ShopList {
 
     public ShopList() {
         this.items = new HashMap<String, Item>();
-        //this.lastUpdated = Instant.now();
+        this.lastUpdated = Instant.now();
     }
 
     public ShopList copy(){
@@ -32,7 +32,12 @@ public class ShopList {
     }
     public void addItem(String name, int quantity) {
         Item item = new Item(name, quantity);
-        items.put(name, item);
+        if (items.containsKey(name)) {
+            updateQuantity(name, quantity);
+        }
+        else {
+            items.put(name, item);
+        }
     }
 
     // Remove an item from the shop list by name

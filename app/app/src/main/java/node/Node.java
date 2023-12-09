@@ -3,18 +3,17 @@ package node;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map.Entry;
 
 import org.zeromq.SocketType;
 import org.zeromq.ZContext;
 import org.zeromq.ZLoop;
 import org.zeromq.ZMQ;
+import org.zeromq.ZThread;
 import org.zeromq.ZLoop.IZLoopHandler;
 import org.zeromq.ZMQ.PollItem;
 import org.zeromq.ZMQ.Socket;
-//import org.zeromq.ZThread.IDetachedRunnable;
+import org.zeromq.ZThread.IDetachedRunnable;
 
-import database.Item;
 import database.KeyValueDatabase;
 import database.ShopList;
 import java.time.Instant;
@@ -34,7 +33,7 @@ public class Node {
     private final static int TTL = 2 * HEARTBEAT; // msecs
     private final static int REP_TIMEOUT = 5 * 1000; // msecs
 
-    private final static int alarm = 2 * 1000; // msecs
+    private final static int alarm = 5 * 1000; // msecs
     private final static boolean show_stats = true;
     private final static boolean time_stats = true;
 
@@ -58,6 +57,8 @@ public class Node {
     private final static String WRITE_REQ = "WRITE";
     private final static String WRITE_REP = "WRITEREP";
     private final static String END_OF_MESSAGE = "ENDOFMESSAGE";
+    private final static String WRITE_FAIL = "WRITEFAIL";
+    private final static String READ_FAIL = "READFAIL";
 
     private int port;
     private Long token;
@@ -68,7 +69,7 @@ public class Node {
 
     private Socket client_router; // Router socket for clients
     private Socket dealer; // Dealer used by clients to send requests to nodes
-    private Socket node_router; // Router socket for nodes
+    private Socket node_router; // Router socket for nodes // Initiated in a separate thread
 
     private KeyValueDatabase kvdb = new KeyValueDatabase();
     // ----------------------------------------------
@@ -141,10 +142,10 @@ public class Node {
         // Set timeout
         Long timeOut = System.currentTimeMillis() + REP_TIMEOUT;
 
-        while (System.currentTimeMillis() > timeOut) { // Wait for snapshot
+        while (System.currentTimeMillis() < timeOut) { // Wait for snapshot
             kvmsg kvMsg = kvmsg.recv(snapshot);
             if (kvMsg == null) {
-                break; // Interrupted
+                continue; // Interrupted
             }
 
             long sequence = kvMsg.getSequence();
@@ -184,88 +185,104 @@ public class Node {
             kvmsg request = kvmsg.recv(socket);
             if (request == null)
                 return -1; // Interrupted
-            String sender = request.getProp("sender");
-            if (!sender.equals(SNDR_NODE))
-                return -1; //
+            if (!request.getProp("sender").equals(SNDR_NODE)) {
+                return -1;
+            }
+            if (request.getKey().startsWith(WRITE_REQ)) {
 
-            if (request.getKey().equals(READ_REQ)) {
+                ShopList shopList = new ShopList();
+
                 String db_key = request.getProp("db_key");
-                kvmsg response = new kvmsg(0);
-                ShopList shopList = node.kvdb.containsKey(db_key) ? (ShopList) node.kvdb.get(db_key) : new ShopList();
+                if (db_key.equals("")) {
+                    System.out.println("E: bad write request in node, aborting");
+                    System.out.println("Key is missing");
 
+                    kvmsg response = new kvmsg(0);
+                    response.setKey(WRITE_REP);
+                    response.setProp("db_key", db_key);
+                    response.setProp("sender", node.getToken().toString());
+                    response.setProp("status", WRITE_FAIL);
+                    return -1;
+                }
+
+                String delete = request.getProp("delete");
+
+                if (delete.equals("true") && node.kvdb.containsKey(db_key)) {
+                    node.kvdb.remove(delete);
+                    kvmsg response = new kvmsg(0);
+                    response.setKey(WRITE_REP);
+                    response.setProp("db_key", delete);
+                    response.setProp("sender", node.getToken().toString());
+                    response.setProp("status", "OK");
+
+                    socket.sendMore(identity);
+                    response.send(socket);
+                    return 0;
+                }
+
+                Instant timestamp = Instant.parse(request.getProp("timestamp"));
+                shopList.setTimeStamp(timestamp);
+
+                int n_items = Integer.parseInt(request.getProp("items"));
+                String[] items = new String(request.body(), ZMQ.CHARSET).split("\n");
+                for (int i = 0; i < n_items; i++) {
+                    String item_name = items[i * 2];
+                    int item_quantity = Integer.parseInt(items[i * 2 + 1]);
+                    shopList.addItem(item_name, item_quantity);
+                }
+
+                try {
+                    node.kvdb.put(db_key, shopList); // Update database // Check for conflicts
+                    kvmsg response = new kvmsg(0);
+                    response.setKey(WRITE_REP);
+                    response.setProp("db_key", db_key);
+                    response.setProp("sender", node.getToken().toString());
+                    response.setProp("status", "OK");
+
+                    socket.sendMore(identity);
+                    response.send(socket);
+
+                } catch (Exception e) {
+
+                    kvmsg response = new kvmsg(0);
+                    response.setKey(WRITE_REP);
+                    response.setProp("db_key", db_key);
+                    response.setProp("sender", node.getToken().toString());
+                    response.setProp("status", WRITE_FAIL);
+
+                    socket.sendMore(identity);
+                    response.send(socket);
+
+                    System.out.println("E: bad write request in node, aborting");
+                    return -1;
+                }
+            }
+            else if (request.getKey().startsWith(READ_REQ)) {
+                String db_key = request.getProp("db_key");
+                ShopList shopList = node.kvdb.containsKey(db_key) ? (ShopList) node.kvdb.get(db_key) : new ShopList();
+                kvmsg response = new kvmsg(0);
                 response.setKey(READ_REP);
                 response.setProp("sender", node.getToken().toString());
                 response.setProp("db_key", db_key);
-                response.setProp("timestamp", shopList.getTimeStamp());
+                response.setProp("timestamp", "%s", shopList.getInstant().toString());
+                response.setProp("items", Integer.toString(shopList.getItems().size()));
+
+                String items = "";
+                for (String list_item : shopList.getItems().keySet()) {
+                    items += list_item + "\n";
+                    items += Integer.toString(shopList.getItems().get(list_item).getQuantity()) + "\n";
+                }
+                response.fmtBody("%s", items);
+                response.setProp("status", "OK");
 
                 socket.sendMore(identity);
                 response.send(socket);
-
-                for (Entry<String, Item> entry : shopList.getItems().entrySet()) {
-                    kvmsg r_item = new kvmsg(0);
-                    r_item.setKey(READ_REP + db_key);
-                    r_item.setProp("sender", node.getToken().toString());
-                    r_item.setProp("item", entry.getKey());
-                    r_item.setProp("quantity", Integer.toString(entry.getValue().getQuantity()));
-
-                    socket.sendMore(identity);
-                    r_item.send(socket);
-                }
-
-                kvmsg r_end = new kvmsg(0);
-                r_end.setKey(END_OF_MESSAGE + db_key);
-
-                socket.sendMore(identity);
-                r_end.send(socket);
-
-                response.destroy();
-                r_end.destroy();
-            } else if (request.getKey().equals(WRITE_REQ)) {
-                String db_key = request.getProp("db_key");
-                Instant timestamp = Instant.parse(request.getProp("timestamp"));
-
-                String deleter = request.getProp("delete");
-                if (deleter.equals("true")) {
-                    node.kvdb.remove(db_key);
-                    return 0;
-                }
-                ShopList shopList = node.kvdb.containsKey(db_key) ? (ShopList) (node.kvdb.get(db_key)) : new ShopList();
-                ShopList copy = shopList.copy();
-
-                if (shopList.getInstant().isBefore(timestamp)) {
-                    shopList.setTimeStamp(timestamp);
-
-                    while (true) {
-                        kvmsg rc_item = kvmsg.recv(socket);
-                        if (item == null)
-                            return -1; // Interrupted
-                        if (rc_item.getKey().equals(END_OF_MESSAGE + db_key)) {
-                            node.kvdb.put(db_key, copy);
-
-                            kvmsg response = new kvmsg(0);
-                            response.setKey(WRITE_REP);
-                            response.setProp("sender", node.getToken().toString());
-                            response.setProp("status", "OK");
-
-                            socket.sendMore(identity);
-                            response.send(socket);
-                            response.destroy();
-                            break;
-                        } else if (rc_item.getKey().equals(WRITE_REQ + db_key)) {
-                            String item_name = rc_item.getProp("item");
-                            int item_quantity = Integer.parseInt(rc_item.getProp("quantity"));
-                            copy.addItem(item_name, item_quantity);
-                        } else {
-                            System.out.println("E: bad request, aborting");
-                            return -1;
-                        }
-                    }
-                }
-            } else {
+            }
+            else {
                 System.out.println("E: bad request, aborting");
                 return -1;
             }
-
+            System.out.println("Received request " + request.getKey() + " " + request.getProp("status"));
             return 0;
         }
     }
@@ -281,7 +298,7 @@ public class Node {
             kvmsg request = kvmsg.recv(socket);
             if (request == null)
                 return -1; // Interrupted
-            if (!request.getKey().startsWith(SNDR_CLIENT))
+            if (!request.getProp("sender").equals(SNDR_CLIENT))
                 return -1; //
             if (request.getKey().equals(READ_REQ)) {
                 fowardReadRequest(node, socket, identity, request);
@@ -297,89 +314,41 @@ public class Node {
         private void fowardReadRequest(Node node, Socket socket, byte[] identity, kvmsg request) {
 
             request.setProp("sender", SNDR_NODE);
-            request.setProp("db_key", request.getProp("db_key"));
             Socket dealer = node.updateDealer();
             request.send(dealer);
 
+            boolean self = false;
             int read_count = 0;
             int read_quorum = node.getReadQuorum();
-
             Long timeout = System.currentTimeMillis() + REP_TIMEOUT;
-            boolean rcv_self = false;
-            String db_key = "";
 
-            List<ShopList> shopLists = new ArrayList<>();
-            ShopList shopList = null;
-
-            while (System.currentTimeMillis() < timeout && read_count < read_quorum && !rcv_self) {
-                kvmsg rcv = kvmsg.recv(node.dealer);
+            while (System.currentTimeMillis() < timeout && read_count < read_quorum) {
+                kvmsg rcv = kvmsg.recv(dealer);
                 if (rcv == null)
                     continue; // Interrupted
                 if (rcv.getKey().equals(READ_REP)) {
-                    if (rcv.getProp("sender").equals(node.getToken().toString())) {
-                        rcv_self = true;
-                    }
-                    db_key = rcv.getProp("db_key");
-                    String timestamp = rcv.getProp("timestamp");
-                    shopList = new ShopList();
-                    shopList.setTimeStamp(Instant.parse(timestamp));
-
-                } else if (rcv.getKey().equals(READ_REP + db_key)) {
-                    String item_name = rcv.getProp("item");
-                    int item_quantity = Integer.parseInt(rcv.getProp("quantity"));
-                    if (shopList != null) {
-                        shopList.addItem(item_name, item_quantity);
-                    }
-                } else if (rcv.getKey().equals(END_OF_MESSAGE + db_key)) {
-                    if (shopList != null) {
-                        shopLists.add(shopList);
-                    }
                     read_count++;
-                } else {
-                    System.out.println("E: bad request, aborting");
-                    continue;
+                }
+                if (rcv.getProp("sender").equals(node.getToken().toString())) {
+                    self = true;
+                }
+                if (read_count >= read_quorum && self) {
+                    socket.sendMore(identity);
+                    // Solve conflict
+                    rcv.setProp("sender", node.getToken().toString());
+                    rcv.setProp("status", "OK");
+                    rcv.send(socket);
+                    return;
                 }
             }
 
-            // Choose the best shop list or combine them
-            ShopList bestShopList = null;
-            for (ShopList sl : shopLists) {
-                if (bestShopList == null) {
-                    bestShopList = sl;
-                } else {
-                    if (sl.getInstant().isAfter(bestShopList.getInstant())) {
-                        bestShopList = sl;
-                    }
-                }
-            }
-
-            // Send response to client
+            // Failed to read from quorum
             kvmsg response = new kvmsg(0);
             response.setKey(READ_REP);
             response.setProp("sender", node.getToken().toString());
-            response.setProp("db_key", db_key);
-
+            response.setProp("status", READ_FAIL);
             socket.sendMore(identity);
             response.send(socket);
-
-            if (bestShopList != null){
-                for (Entry<String, Item> entry : bestShopList.getItems().entrySet()) {
-                    kvmsg r_item = new kvmsg(0);
-                    r_item.setKey(READ_REP + db_key);
-                    r_item.setProp("sender", node.getToken().toString());
-                    r_item.setProp("item", entry.getKey());
-                    r_item.setProp("quantity", Integer.toString(entry.getValue().getQuantity()));
-    
-                    socket.sendMore(identity);
-                    r_item.send(socket);
-                }
-            }
-
-            kvmsg r_end = new kvmsg(0);
-            r_end.setKey(END_OF_MESSAGE + db_key);
-
-            socket.sendMore(identity);
-            r_end.send(socket);
         }
 
         private static void fowardWriteRequest(Node node, Socket socket, byte[] identity, kvmsg request) {
@@ -398,8 +367,7 @@ public class Node {
                 request.setProp("sender", SNDR_NODE);
                 dealer.sendMore(identity);
                 request.send(dealer);
-            }
-            else {
+            } else {
                 System.out.println("E: bad request, aborting");
                 return;
             }
@@ -407,7 +375,7 @@ public class Node {
             // Receive response from nodes
             int write_count = 0;
             int write_quorum = node.getWriteQuorum();
-        
+
             Long timeout = System.currentTimeMillis() + REP_TIMEOUT;
 
             while (System.currentTimeMillis() < timeout && write_count < write_quorum) {
@@ -517,24 +485,50 @@ public class Node {
         // ----------------------------------------------
     }
 
-    private static class node_worker implements Runnable {
-        Socket node_router;
-        ZLoop loop;
-
-        public node_worker(Socket node_router, ZLoop loop) {
-            this.node_router = node_router;
-            this.loop = loop;
-        }
-
+    private static class node_worker implements IDetachedRunnable {
         @Override
-        public void run() {
-            PollItem poller = new PollItem(node_router, ZMQ.Poller.POLLIN);
-            loop.addPoller(poller, new ReceiveNodeRequest(), this);
+        public void run(Object[] args) {
+            Node node = (Node) args[0];
+
+
+            ZLoop loop = new ZLoop(node.ctx);
+            loop.verbose(false);
+            PollItem poller = new PollItem(node.node_router, ZMQ.Poller.POLLIN);
+            loop.addPoller(poller, new ReceiveNodeRequest(), node);
+            loop.start();
+        }
+    }
+
+    private static class main_node_communication implements IDetachedRunnable {
+        @Override
+        public void run(Object[] args) {
+            Node node = (Node) args[0];
+
+        }
+    }
+
+    private static class client_worker implements IDetachedRunnable {
+        @Override
+        public void run(Object[] args) {
+            Node node = (Node) args[0];
+            ZLoop loop = new ZLoop(node.ctx);
+            loop.verbose(false);
+
+            PollItem poller = new PollItem(node.client_router, ZMQ.Poller.POLLIN);
+            loop.addPoller(poller, new ReceiveClientRequest(), node);
+
             loop.start();
         }
     }
 
     public void run() {
+
+        ZThread.start(new main_node_communication(), this);
+        ZThread.start(new node_worker(), this);
+        ZThread.start(new client_worker(), this);
+
+        ZLoop loop = new ZLoop(ctx);
+        loop.verbose(false);
 
         requestSnapshot();
 
@@ -545,13 +539,6 @@ public class Node {
         if (time_stats) {
             loop.addTimer(alarm, 0, new PrintStatus(), this);
         }
-
-        poller = new PollItem(client_router, ZMQ.Poller.POLLIN);
-        loop.addPoller(poller, new ReceiveClientRequest(), this);
-
-        // Reeceive node requests in a separate thread
-        Thread node_thread = new Thread(new node_worker(node_router, loop));
-        node_thread.start();
         loop.start();
 
         ctx.close();
@@ -568,7 +555,7 @@ public class Node {
             return;
         }
         long token = 42;
-        int port = 0;
+        int port = 5580;
 
         int i;
         for (i = 0; i < args.length; i += 2) {
