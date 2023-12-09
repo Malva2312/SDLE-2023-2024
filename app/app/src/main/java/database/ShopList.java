@@ -14,7 +14,15 @@ public class ShopList {
         this.lastUpdated = Instant.now();
     }
 
-    public void setTime(Instant time) {
+    public ShopList copy(){
+        ShopList copy = new ShopList();
+        for (Item item : items.values()) {
+            copy.addItem(item.getName(), item.getPrice(), item.getQuantity());
+        }
+        return copy;
+    }
+
+    public void setTimeStamp(Instant time) {
         this.lastUpdated = time;
     }
     // Add an item to the shop list
@@ -45,6 +53,9 @@ public class ShopList {
 
     public String getTimeStamp() {
         return formatTimeStamp();
+    }
+    public Instant getInstant() {
+        return lastUpdated;
     }
 
     public HashMap<String, Item> getItems() {
