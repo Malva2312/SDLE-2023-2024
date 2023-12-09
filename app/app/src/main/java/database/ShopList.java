@@ -74,9 +74,9 @@ public class ShopList {
     // Display the items in the shop list
     public void displayItems() {
         if (items.isEmpty()) {
-            System.out.println("Shop list is empty.");
+            System.out.println("\nShop list is empty.");
         } else {
-            System.out.println("Shop List:");
+            System.out.println("\nShop List:");
             for (Item item : items.values()) {
                 System.out.println(item.toString());
             }
