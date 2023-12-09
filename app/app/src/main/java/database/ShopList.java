@@ -14,24 +14,41 @@ public class ShopList {
         this.lastUpdated = Instant.now();
     }
 
+    public void setTime(Instant time) {
+        this.lastUpdated = time;
+    }
     // Add an item to the shop list
     public void addItem(String name, double price, int quantity) {
         Item item = new Item(name, price, quantity);
         items.put(name, item);
-        updateTimeStamp();
+    }
+    public void addItem(String name, int quantity) {
+        Item item = new Item(name, quantity);
+        items.put(name, item);
     }
 
     // Remove an item from the shop list by name
     public void removeItem(String name) {
         items.remove(name);
-        updateTimeStamp();
     }
 
     // Update the quantity of an item
     public void updateQuantity(String name, int newQuantity) {
         Item item = items.get(name);
-        item.setQuantity(newQuantity);
-        updateTimeStamp();
+        if (newQuantity <= 0) {
+            removeItem(name);
+        }
+        else {
+            item.setQuantity(newQuantity);
+        }
+    }
+
+    public String getTimeStamp() {
+        return formatTimeStamp();
+    }
+
+    public HashMap<String, Item> getItems() {
+        return items;
     }
 
     // Get the total price of all items in the shop list
@@ -87,7 +104,7 @@ public class ShopList {
 
         // Remove an item
         shopList.removeItem("Bread");
-
+        shopList.updateTimeStamp();
         // Display updated items and total price
         shopList.displayItems();
     }
