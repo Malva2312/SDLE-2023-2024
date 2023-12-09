@@ -112,7 +112,18 @@ public class App {
         System.out.print("\nEnter the name of the item to remove: ");
         String itemName = scanner.nextLine();
 
-        shopList.removeItem(itemName);
-        System.out.println("\nItem '" + itemName + "' removed from the shopping list.");
+        if (!shopList.getItems().containsKey(itemName)) {
+            System.out.println("\nItem '" + itemName + "' not found in the shopping list.");
+            return;
+        }
+        else{
+        System.out.print("\nEnter the quantity of the item to remove: ");
+        int quantity = scanner.nextInt();
+
+        int newQuantity = shopList.getItems().get(itemName).getQuantity() - quantity;
+
+        shopList.updateQuantity(itemName, newQuantity);
+        System.out.println("\nItem '" + itemName + "' x" + quantity +" removed from the shopping list.");
+        }
     }
 }
