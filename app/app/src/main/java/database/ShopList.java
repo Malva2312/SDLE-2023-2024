@@ -1,6 +1,9 @@
 package database;
 
 import java.util.HashMap;
+import java.util.List;        
+import java.util.ArrayList;  
+import java.util.Comparator; 
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 
@@ -60,18 +63,27 @@ public class ShopList {
         return total;
     }
 
-    // Display the items in the shop list
-    public void displayItems() {
-        if (items.isEmpty()) {
-            System.out.println("\nShop list is empty.");
-        } else {
-            System.out.println("\nShop List:");
-            for (Item item : items.values()) {
-                System.out.println(item.toString());
-            }
-            System.out.println("Total Price: $" + getTotalPrice());
+// Display the items in the shop list in alphabetical order
+public void displayItems() {
+    if (items.isEmpty()) {
+        System.out.println("\nShop list is empty.");
+    } else {
+        System.out.println("\nShop List:");
+        
+        // Create a list to hold the items
+        List<Item> itemList = new ArrayList<>(items.values());
+
+        // Sort the items alphabetically by name
+        itemList.sort(Comparator.comparing(Item::getName));
+
+        // Print the sorted items
+        for (Item item : itemList) {
+            System.out.println(item.toString());
         }
+
+        System.out.println("Total Price: $" + getTotalPrice());
     }
+}
 
     // Update the last updated timestamp
     private void updateTimeStamp() {
