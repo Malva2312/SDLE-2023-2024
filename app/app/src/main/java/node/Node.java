@@ -232,12 +232,12 @@ public class Node {
         if (kvMsg == null) {
             return -1; // Interrupted
         }
-        if (kvMsg.equalsIgnoreCase(REP_WRITE + key)) {
+        /*if (kvMsg.equalsIgnoreCase(REP_WRITE + key)) {
             kvMsg.destroy();
         } else {
             System.out.printf("E: bad request, aborting\n");
             return -1;
-        }
+        }*/
 
         return 0;
     }
