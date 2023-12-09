@@ -1,6 +1,7 @@
 package node;
 
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.Map.Entry;
 
 
 import org.zeromq.SocketType;
@@ -11,6 +12,10 @@ import org.zeromq.ZLoop.IZLoopHandler;
 import org.zeromq.ZMQ.PollItem;
 import org.zeromq.ZMQ.Socket;
 
+import database.Item;
+import database.KeyValueDatabase;
+import database.ShopList;
+import java.time.Instant;
 
 public class Node {
     private final static int MAIN_NODE_PORT = 5556;
@@ -20,8 +25,14 @@ public class Node {
     
     private final static String SUB_NODES = "/NODE/";
     private final static String FLUSH_SIGNAL = "/FLUSH/";
+
+    private final static String REP_READ = "/READ/"; // + key
+    private final static String REP_READ_ITEM = "/READ_ITEM/"; // + key
+    private final static String REP_READ_END = "/READ_END/"; // + key
+    
     
     private final static int HEARTBEAT = 5 * 1000; //  msecs
+    private final static int TTL = 2 * HEARTBEAT; //  msecs
     
     private final int alarm = 2 * 1000; //  msecs
     private final boolean show_stats = true;
@@ -39,8 +50,19 @@ public class Node {
     String addr;
     private ConcurrentHashMap<Long, String> tokenAddrsMap;
 
+    private KeyValueDatabase kvdb = new KeyValueDatabase();
+    private int replicationFactor = 3;
 
-    private static class receiveUpdate implements IZLoopHandler{
+    private final static String REQ_CLIENT = "/CLIENT/";
+    private final static String REQ_NODE = "/RING/";    
+
+    private final static String REQ_READ = "/READ/";
+    private final static String REQ_WRITE = "/WRITE/";
+
+    // ----------------------------------------------
+    // Main node interaction for node state
+
+    private static class ReceiveUpdate implements IZLoopHandler{
         @Override
         public int handle(ZLoop loop, PollItem item, Object arg) {
 
@@ -72,7 +94,7 @@ public class Node {
         }
     }
 
-    private static class sendHeartBeat implements IZLoopHandler {
+    private static class SendHeartBeat implements IZLoopHandler {
         @Override
         public int handle(ZLoop loop, PollItem item, Object arg) {
             Node node = (Node) arg;
@@ -80,7 +102,7 @@ public class Node {
             kvmsg kvMsg = new kvmsg(0);
             kvMsg.fmtKey("%s%d", SUB_NODES, node.token);
             kvMsg.fmtBody("%s", node.addr);
-            kvMsg.setProp("ttl", "%d", HEARTBEAT * 2);
+            kvMsg.setProp("ttl", "%d", TTL);
             kvMsg.send(node.publisher);
             kvMsg.destroy();
 
@@ -88,7 +110,7 @@ public class Node {
         }
     }
 
-    private static class printStatus implements IZLoopHandler {
+    private static class PrintStatus implements IZLoopHandler {
         @Override
         public int handle(ZLoop loop, PollItem item, Object arg) {
             Node node = (Node) arg;
@@ -132,6 +154,135 @@ public class Node {
         String new_addr = new String(kvMsg.body(), ZMQ.CHARSET);
         this.tokenAddrsMap.put(new_token, new_addr);
     }
+    // ----------------------------------------------
+
+    // ----------------------------------------------
+    // Node interaction for database requests
+    private static class ReceiveRequest implements IZLoopHandler {
+        @Override
+        public int handle(ZLoop loop, PollItem item, Object arg) {
+            Node node = (Node) arg;
+            Socket socket = item.getSocket();
+
+            byte[] identity = socket.recv();
+            if (identity == null)
+                return 0; //  Interrupted
+
+            String request = socket.recvStr();
+
+            if (request.equals(REQ_CLIENT)) {
+                //handleClientRequest(socket);
+            }
+            else if (request.equals(REQ_NODE)) {
+                //handleNodeRequest(identity, socket, arg);
+            }
+            else {
+                System.out.printf("E: bad request, aborting\n");
+                return -1;
+            }
+            
+
+            // Read operation from client
+                // Read from self and from next nodes in the ring (max = replicationFactor)
+                // If read from self and from R of the next nodes in the ring, return the value (R = 2)
+            
+            // Write operation from client
+                // Write to self and to next nodes in the ring (max = replicationFactor)
+                // If write to self and to W of the next nodes in the ring, return the value (W = 2)         
+            return 0;
+        }
+    }
+
+    private static ShopList sendNodeReadRequest(Socket socket, String key){
+        socket.sendMore(REQ_NODE);
+        
+        ShopList shopList = null;
+   
+        socket.send(REQ_READ + key);
+
+        while (true) {
+            kvmsg kvMsg = kvmsg.recv(socket);
+            if (kvMsg == null) {
+                break; // Interrupted
+            }
+            if (kvMsg.getKey().equalsIgnoreCase(REP_READ + key)) {
+                shopList = new ShopList();
+                Instant timeStamp = Instant.parse(kvMsg.getProp("timeStamp"));
+                shopList.setTime(timeStamp);
+            } else if (kvMsg.getKey().equalsIgnoreCase(REP_READ_ITEM + key) && shopList != null) {
+                String name = kvMsg.getProp("name");
+                int quantity = Integer.parseInt(kvMsg.getProp("quantity"));
+                shopList.addItem(name, quantity);
+            } else if (kvMsg.getKey().equalsIgnoreCase(REP_READ_END + key) && shopList != null) {
+                kvMsg.destroy();
+                break;
+            } else {
+                System.out.printf("E: bad request, aborting\n");
+                return null;
+            }
+        }
+
+        return shopList;
+    }
+    private static int sendNodeWriteRequest(Socket socket, String key, ShopList shopList){
+        socket.sendMore(REQ_NODE);
+        socket.send(REQ_WRITE + key);
+
+        kvmsg kvMsg = kvmsg.recv(socket);
+        if (kvMsg == null) {
+            return -1; // Interrupted
+        }
+        if (kvMsg.equalsIgnoreCase(REP_WRITE + key)) {
+            kvMsg.destroy();
+        } else {
+            System.out.printf("E: bad request, aborting\n");
+            return -1;
+        }
+
+        return 0;
+    }
+    private int handleNodeRequest(byte[] identity, Socket socket, Object arg) {
+        Node node = (Node) arg;
+
+        String request = socket.recvStr();
+        if (request.startsWith(REQ_READ)) {
+            String key = request.substring(REQ_READ.length());
+            ShopList shopList = null;
+            if (node.kvdb.containsKey(key)) {
+                shopList = (ShopList) node.kvdb.get(key);
+            }
+            else {
+                shopList = new ShopList();
+            }
+
+            // Send state socket to client
+            kvmsg kvMsg = new kvmsg(0);
+            kvMsg.setKey(REP_READ + key);
+            kvMsg.setProp("timeStamp", shopList.getTimeStamp());
+            kvMsg.send(socket);
+            kvMsg.destroy();
+
+            for (Entry<String, Item> entry : shopList.getItems().entrySet()){
+                kvMsg = new kvmsg(0);
+                kvMsg.setKey(REP_READ_ITEM + key);
+                kvMsg.setProp("name", entry.getKey());
+                kvMsg.setProp("quantity", Integer.toString(entry.getValue().getQuantity()));
+                kvMsg.send(socket);
+                kvMsg.destroy();
+            }
+            
+            // End of read request
+            kvMsg = new kvmsg(0);
+            kvMsg.setKey(REP_READ_END + key);
+            kvMsg.send(socket);
+        }
+
+        return 0;
+    }
+    // ----------------------------------------------
+
+
+
 
     public Node(int port, Long token) {
         this.port = port;
@@ -143,7 +294,7 @@ public class Node {
         loop = new ZLoop(ctx);
         loop.verbose(false);
 
-
+        // Main node interaction for node state ------
         snapshot = ctx.createSocket(SocketType.DEALER);
         snapshot.connect("tcp://localhost:" + MAIN_NODE_PORT);
 
@@ -155,6 +306,11 @@ public class Node {
         publisher.connect("tcp://localhost:" + (MAIN_NODE_PORT + 2));
 
         tokenAddrsMap = new ConcurrentHashMap<Long, String>();
+        // ----------------------------------------------
+
+        // Node interaction for database requests ------
+
+        // ----------------------------------------------
     }
 
     public void run() {
@@ -162,12 +318,12 @@ public class Node {
         requestSnapshot();
 
         PollItem poller = new PollItem(subscriber, ZMQ.Poller.POLLIN);
-        loop.addPoller(poller, new receiveUpdate(), this);
+        loop.addPoller(poller, new ReceiveUpdate(), this);
 
 
-        loop.addTimer(HEARTBEAT, 0, new sendHeartBeat(), this);
+        loop.addTimer(HEARTBEAT, 0, new SendHeartBeat(), this);
         if (time_stats){
-            loop.addTimer(alarm, 0, new printStatus(), this);
+            loop.addTimer(alarm, 0, new PrintStatus(), this);
         }
 
 
