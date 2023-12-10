@@ -49,7 +49,7 @@ public class ExampleClient
             kvmsg msg = new kvmsg(0);
             msg.setKey(WRITE_REQ);
             msg.setProp("db_key", "unique_id_123");
-            msg.setProp("sender", SNDR_CLIENT);
+            msg.setProp("sender", SNDR_NODE);
             msg.setProp("timestamp", "%s", shopList.getInstant().toString());
 
             msg.setProp("items", Integer.toString(shopList.getItems().size()));
@@ -75,7 +75,7 @@ public class ExampleClient
             msg = new kvmsg(0);
             msg.setKey(READ_REQ);
             msg.setProp("db_key", "unique_id_123");
-            msg.setProp("sender", SNDR_CLIENT);
+            msg.setProp("sender", SNDR_NODE);
 
             msg.send(socket1);
 
