@@ -60,24 +60,25 @@ public class MainNode {
                 System.out.printf("E: bad request, aborting\n");
                 return -1;
             }
-            
+
             if (subtree != null) {
                 System.out.println("request: " + request.getKey());
-                System.out.println("subtree: " + subtree );
+                System.out.println("subtree: " + subtree);
 
-                Long t = Long.parseLong(request.getProp("token"));
-                String addr = request.getProp("addr");
-                int ttl = Integer.parseInt(request.getProp("ttl"));
+                if (!request.getProp("token").equals("") && !request.getProp("addr").equals("")) {
+                    Long t = Long.parseLong(request.getProp("token"));
+                    String addr = request.getProp("addr");
+                    int ttl =  !request.getProp("ttl").equals("") ? Integer.parseInt(request.getProp("ttl")) : 0;
 
-                kvmsg store = new kvmsg(++node.sequence);
-                store.setKey(subtree + t.toString());
-                store.fmtBody("%s", subtree);
-                store.setProp("token", t.toString());
-                store.setProp("addr", addr);
-                store.setProp("ttl", Long.toString(System.currentTimeMillis() + ttl));
-                store.send(node.publisher);
-                store.store(node.kvLog);
-
+                    kvmsg store = new kvmsg(++node.sequence);
+                    store.setKey(subtree + t.toString());
+                    store.fmtBody("%s", subtree);
+                    store.setProp("token", t.toString());
+                    store.setProp("addr", addr);
+                    store.setProp("ttl", Long.toString(System.currentTimeMillis() + ttl));
+                    store.send(node.publisher);
+                    store.store(node.kvLog);
+                }
 
                 kvmsg reply = new kvmsg(node.sequence);
                 reply.setKey(REP_SNAPSHOT);
