@@ -1,10 +1,14 @@
 package crdt;
 
 public class IncrementOperation implements Operation<Integer> {
-    private int value;
+    private final int value;
 
-    // Constructor, getters, setters, etc.
+    // Constructor
+    public IncrementOperation(int value) {
+        this.value = value;
+    }
 
+    // Getter
     @Override
     public Integer getValue() {
         return value;
