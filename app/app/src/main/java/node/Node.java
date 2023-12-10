@@ -4,6 +4,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.checkerframework.checker.units.qual.radians;
 import org.zeromq.SocketType;
 import org.zeromq.ZContext;
 import org.zeromq.ZLoop;
@@ -43,6 +44,8 @@ public class Node {
     Socket snapshot; // Request Snapshot from MainNode
     Socket subscriber; // Subscribe to all updates from MainNode
     Socket publisher; // Publish updates to MainNode
+
+    Long sequence = 0L;
 
     // ----------------------------------------------
     private ConcurrentHashMap<Long, Integer> tokenAddrsMap;
@@ -87,12 +90,26 @@ public class Node {
                 return -1; // Interrupted
 
             if (kvMsg.getSequence() > 0) {
+                node.sequence = kvMsg.getSequence();
+
                 if (kvMsg.getKey().startsWith(SUB_NODES + FLUSH_SIGNAL)) {
-                    Long old_key = Long.parseLong(kvMsg.getKey().substring((SUB_NODES + FLUSH_SIGNAL).length()));
+                    Long old_key = Long.parseLong(kvMsg.getProp("token"));
+                    System.out.println("I: flush token " + old_key);
                     node.tokenAddrsMap.remove(old_key);
                 } else if (kvMsg.getKey().startsWith(SUB_NODES)) {
-                    System.out.println("Received update " + kvMsg.getKey());
-                    node.storeTokenAddrsMap(kvMsg, SUB_NODES);
+                    Long t = Long.parseLong(kvMsg.getProp("token"));
+                    int addr = Integer.parseInt(kvMsg.getProp("addr"));
+
+                    if (node.tokenAddrsMap.containsKey(t)) {
+                        if (node.tokenAddrsMap.get(t) != addr){
+                            System.out.println("I: update token " + t);
+                            node.tokenAddrsMap.replace(t, addr);
+                        }
+                    } else {
+                        System.out.println("I: new token " + t);
+                        node.tokenAddrsMap.put(t, addr);
+                    }
+
                 } else {
                     System.out.println("E: bad request, aborting");
                     return -1;
@@ -111,8 +128,10 @@ public class Node {
             Node node = (Node) arg;
 
             kvmsg kvMsg = new kvmsg(0);
-            kvMsg.fmtKey("%s%d", SUB_NODES, node.getToken());
-            kvMsg.fmtBody("%s", Integer.toString(node.getPort()));
+            kvMsg.fmtKey("%s", SUB_NODES + node.token.toString());
+            kvMsg.fmtBody("%s", SUB_NODES);
+            kvMsg.setProp("token", node.getToken().toString());
+            kvMsg.setProp("addr", Integer.toString(node.getPort()));
             kvMsg.setProp("ttl", "%d", TTL);
             kvMsg.send(node.publisher);
             kvMsg.destroy();
@@ -136,40 +155,41 @@ public class Node {
 
     private void requestSnapshot() {
         // get state snapshot
-        snapshot.sendMore(REQ_SNAPSHOT);
-        snapshot.send(SUB_NODES);
+        kvmsg kvMsg = new kvmsg(0);
+        kvMsg.setKey(REQ_SNAPSHOT);
+        kvMsg.setProp("subtree", SUB_NODES);
+        kvMsg.setProp("token", Long.toString(this.token));
+        kvMsg.setProp("addr", Integer.toString(port));
+        kvMsg.setProp("ttl", "%d", TTL);
+        kvMsg.send(snapshot);
+        kvMsg.destroy();
 
         // Set timeout
         Long timeOut = System.currentTimeMillis() + REP_TIMEOUT;
 
         while (System.currentTimeMillis() < timeOut) { // Wait for snapshot
-            kvmsg kvMsg = kvmsg.recv(snapshot);
+            kvMsg = kvmsg.recv(snapshot);
             if (kvMsg == null) {
-                continue; // Interrupted
+                break; // Interrupted
             }
+            
+            if (kvMsg.getKey().equals(REP_SNAPSHOT)) {
+                String[] body = new String(kvMsg.body(), ZMQ.CHARSET).split("\n");
+                int size = Integer.parseInt(kvMsg.getProp("size"));
+ 
+                for (int i = 0; i < size;) {
 
-            long sequence = kvMsg.getSequence();
-            if (show_stats)
-                System.out.printf("I: received snapshot=%d\n", sequence);
-            // Check if snapshot is complete
-            if (REP_SNAPSHOT.equalsIgnoreCase(kvMsg.getKey())) {
+                    Long new_token = Long.parseLong(body[i++]);
+                    int new_addr = Integer.parseInt(body[i++]);
+                    tokenAddrsMap.put(new_token, new_addr);
+                }
+                this.sequence = kvMsg.getSequence();
                 kvMsg.destroy();
-                return;
+                break;
             }
-
-            storeTokenAddrsMap(kvMsg, SUB_NODES);
         }
-        System.out.println("E: failed to receive snapshot from broker, aborting");
-
-        // End of snapshot request
     }
 
-    private void storeTokenAddrsMap(kvmsg kvMsg, String subtree) {
-        // Store token and address in tokenAddrsMap
-        Long new_token = Long.parseLong(kvMsg.getKey().substring(subtree.length()));
-        int new_addr = Integer.parseInt(new String(kvMsg.body(), ZMQ.CHARSET));
-        this.tokenAddrsMap.put(new_token, new_addr);
-    }
     // ----------------------------------------------
 
     // ----------------------------------------------
@@ -291,6 +311,9 @@ public class Node {
         @Override
         public int handle(ZLoop loop, PollItem item, Object arg) {
 
+            System.out.println("Received request ");
+
+
             Node node = (Node) arg;
             Socket socket = item.getSocket(); // Router socket
 
@@ -405,8 +428,10 @@ public class Node {
         // Update dealer socket
         dealer.close();
         dealer = ctx.createSocket(SocketType.DEALER);
-        for (int port : nextNodeAddr()) {
-            dealer.connect("tcp://localhost:" + port + 1);
+        List<Integer> next= nextNodeAddr();
+        for (int port : next) {
+            System.out.println("Connecting to tcp://localhost:" + port);
+            dealer.connect("tcp://localhost:" + port);
         }
         return this.dealer;
     }
@@ -420,22 +445,20 @@ public class Node {
     }
 
     public List<Integer> nextNodeAddr() {
-        List<Integer> addrs = new ArrayList<>();
-        if (tokenAddrsMap.size() < getReplicationFactor()) {
-            addrs.add(port + 1);
-        } else {
-            List<Long> ringKeys = new ArrayList<>(tokenAddrsMap.keySet());
-            int keyIndex = ringKeys.indexOf(token);
+        List<Long> neeededTokens = new ArrayList<>();
+        List<Long> ring = new ArrayList<>(tokenAddrsMap.keySet());
 
-            if (keyIndex != -1) {
-                // Collect the next N keys in the ring
-                for (int i = 1; i <= replicationFactor; i++) {
-                    int nextIndex = (keyIndex + i) % ringKeys.size();
-                    addrs.add(tokenAddrsMap.get(ringKeys.get(nextIndex)));
-                }
+        System.out.println("Search for token: " + token);
+        int index = ring.indexOf(token);
+
+        while (true){
+            System.out.println(tokenAddrsMap.keySet().size());
+            if (neeededTokens.size() == replicationFactor) {
+                break;
             }
         }
-        return addrs;
+        
+        return neeededTokens.stream().map(token -> tokenAddrsMap.get(token)).toList();
     }
 
     private int getReplicationFactor() {
@@ -499,14 +522,6 @@ public class Node {
         }
     }
 
-    private static class main_node_communication implements IDetachedRunnable {
-        @Override
-        public void run(Object[] args) {
-            Node node = (Node) args[0];
-
-        }
-    }
-
     private static class client_worker implements IDetachedRunnable {
         @Override
         public void run(Object[] args) {
@@ -523,10 +538,6 @@ public class Node {
 
     public void run() {
 
-        ZThread.start(new main_node_communication(), this);
-        ZThread.start(new node_worker(), this);
-        ZThread.start(new client_worker(), this);
-
         ZLoop loop = new ZLoop(ctx);
         loop.verbose(false);
 
@@ -539,6 +550,11 @@ public class Node {
         if (time_stats) {
             loop.addTimer(alarm, 0, new PrintStatus(), this);
         }
+
+        ZThread.start(new node_worker(), this);
+        ZThread.start(new client_worker(), this);
+
+
         loop.start();
 
         ctx.close();
@@ -550,7 +566,7 @@ public class Node {
         // args could be empty, then default values will be used
         // args could be in any order
 
-        if (args.length <= 0 && args.length % 2 != 0 && args.length > 4) {
+        if (args.length < 0 && args.length % 2 != 0 && args.length > 4) {
             System.out.println("Wrong arguments");
             return;
         }

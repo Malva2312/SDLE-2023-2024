@@ -1,9 +1,8 @@
 package node;
 
 import java.util.ArrayList;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.HashMap;
 import java.util.Map.Entry;
-
 
 import org.zeromq.SocketType;
 import org.zeromq.ZContext;
@@ -32,7 +31,7 @@ public class MainNode {
 
     private final static int HEARTBEAT = 1000; //  msecs
 
-    private ConcurrentHashMap<String, kvmsg> kvLog;
+    private HashMap<String, kvmsg> kvLog;
     //private ConcurrentHashMap<Long, String> tokenAddrsMap;
 
     // -----------------------------------------------
@@ -49,11 +48,12 @@ public class MainNode {
             if (identity == null)
                 return 0; //  Interrupted
             
-            String request = socket.recvStr();
+            kvmsg request = kvmsg.recv(socket);
+            if (request == null)
+                return -1; //  Interrupted
             String subtree = null;
-
-            if (request.equals(REQ_SNAPSHOT)) {
-                subtree = socket.recvStr();
+            if (request.getKey().equals(REQ_SNAPSHOT)) {
+                subtree = request.getProp("subtree");
             }
             // else if (other type of requests ...)
             else {
@@ -61,25 +61,46 @@ public class MainNode {
                 return -1;
             }
             
-            System.out.println("request: " + request);
-            System.out.println("subtree: " + subtree);
             if (subtree != null) {
-                // Send state socket to client
+                System.out.println("request: " + request.getKey());
+                System.out.println("subtree: " + subtree );
+
+                Long t = Long.parseLong(request.getProp("token"));
+                String addr = request.getProp("addr");
+                int ttl = Integer.parseInt(request.getProp("ttl"));
+
+                kvmsg store = new kvmsg(++node.sequence);
+                store.setKey(subtree + t.toString());
+                store.fmtBody("%s", subtree);
+                store.setProp("token", t.toString());
+                store.setProp("addr", addr);
+                store.setProp("ttl", Long.toString(System.currentTimeMillis() + ttl));
+                store.send(node.publisher);
+                store.store(node.kvLog);
+
+
+                kvmsg reply = new kvmsg(node.sequence);
+                reply.setKey(REP_SNAPSHOT);
+                reply.setProp("subtree", subtree);
+                reply.setProp("sender", SUB_NODES);
+
+                int count = 0;
+                String body = "";
                 for (Entry<String, kvmsg> entry : node.kvLog.entrySet()) {
-                    if (entry.getValue().getKey().startsWith(subtree)) {
-                        socket.send(identity, // Choose recipient
-                                ZMQ.SNDMORE);
-                        entry.getValue().send(socket);
+                    String key = entry.getKey();
+                    if (key.startsWith(subtree)) {
+                        body += entry.getValue().getProp("token"); body += "\n";
+                        body += entry.getValue().getProp("addr");  body += "\n";
+                        count++;
                     }
                 }
+                reply.setProp("size", Integer.toString(count));
+                reply.fmtBody("%s", body);
+                socket.sendMore(identity);
+                reply.send(socket);
+                reply.destroy();
 
-                // End of snapshot message
-                socket.send(identity, ZMQ.SNDMORE);
-                kvmsg kvMsg = new kvmsg(node.sequence);
-                kvMsg.setKey(REP_SNAPSHOT);
-                kvMsg.setBody(subtree.getBytes(ZMQ.CHARSET));
-                kvMsg.send(socket);
-                kvMsg.destroy();
+                System.out.println("Sent snapshot");
             }
 
             return 0;
@@ -115,7 +136,7 @@ public class MainNode {
     private static class FlushTTL implements IZLoopHandler {
         @Override
         public int handle(ZLoop loop, PollItem item, Object arg) {
-            //System.out.println("FlushTTL");
+            System.out.println("FlushTTL");
 
             MainNode node = (MainNode) arg;
             if (node.kvLog != null) {
@@ -126,13 +147,13 @@ public class MainNode {
                     if (ttl > 0 && System.currentTimeMillis() > ttl) {
                             // If expired, then remove it from kvLog
                             
-                            kvmsg flush_kvMsg = new kvmsg(++node.sequence);
-                            Long old_key = Long.parseLong(msg.getKey().substring((SUB_NODES).length()));
-                            flush_kvMsg.setKey( SUB_NODES + FLUSH_SIGNAL + old_key.toString());
-                            flush_kvMsg.setBody(ZMQ.MESSAGE_SEPARATOR);
-                            flush_kvMsg.send(node.publisher);
-                            flush_kvMsg.destroy();
+                            kvmsg flush = new kvmsg(++node.sequence);
+                            flush.fmtKey("%s%s",SUB_NODES, FLUSH_SIGNAL);
+                            System.out.println("FlushTTL: " + msg.getProp("token"));
+                            flush.setProp("token", msg.getProp("token"));
                             node.kvLog.remove(msg.getKey());
+                            flush.send(node.publisher);
+
                             System.out.printf("I: Expired: %s\n", msg.getKey());
                     }
                 }
@@ -160,7 +181,7 @@ public class MainNode {
         this.collector = ctx.createSocket(SocketType.PULL);
         this.collector.bind(String.format("tcp://*:%d", this.port + 2));
 
-        this.kvLog = new ConcurrentHashMap<String, kvmsg>();
+        this.kvLog = new HashMap<String, kvmsg>();
         //this.tokenAddrsMap = new ConcurrentHashMap<Long, String>();
     }
 
