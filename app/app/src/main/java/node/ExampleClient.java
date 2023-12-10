@@ -49,7 +49,7 @@ public class ExampleClient
 
             kvmsg msg = new kvmsg(0);
             msg.setKey(WRITE_REQ);
-            msg.setProp("db_key", "unique_id_123");
+            //msg.setProp("db_key", "unique_id_123");
             msg.setProp("sender", SNDR_CLIENT);
             msg.setProp("timestamp", "%s", shopList.getInstant().toString());
 
@@ -61,15 +61,15 @@ public class ExampleClient
                 items += Integer.toString(shopList.getItems().get(item).getQuantity()) + "\n";
             }
             msg.fmtBody("%s", items);
-            //msg.send(socket1);
+            msg.send(socket1);
 
 
             // Wait for the reply
 
-            System.out.println("Waiting for reply");
+            System.out.println("Waiting for WRITE reply");
             kvmsg reply;
-            //reply= kvmsg.recv(socket1);
-            //System.out.println("Received reply " + reply.getKey() + " " + reply.getProp("status"));
+            reply = kvmsg.recv(socket1);
+            System.out.println("Received reply " + reply.getKey() + " " + reply.getProp("status"));
 
 
             // REQUEST READ
@@ -80,9 +80,18 @@ public class ExampleClient
 
             msg.send(socket1);
 
+
+            // SLEEP
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+
             // Wait for the reply
-            System.out.println("Waiting for reply");
+            System.out.println("Waiting for READ reply");
             reply = kvmsg.recv(socket1);
+
 
             if (reply == null) {
                 System.out.println("No reply");
@@ -96,6 +105,7 @@ public class ExampleClient
             ShopList rcv = new ShopList();
             rcv.setTimeStamp(Instant.parse(reply.getProp("timestamp")));
 
+            
             String db_key = reply.getProp("db_key");
             int items_count = Integer.parseInt(reply.getProp("items"));
             String[] list_items = new String(reply.body(), ZMQ.CHARSET).split("\n");

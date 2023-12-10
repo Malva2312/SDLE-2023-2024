@@ -136,7 +136,6 @@ public class MainNode {
     private static class FlushTTL implements IZLoopHandler {
         @Override
         public int handle(ZLoop loop, PollItem item, Object arg) {
-            System.out.println("FlushTTL");
 
             MainNode node = (MainNode) arg;
             if (node.kvLog != null) {
