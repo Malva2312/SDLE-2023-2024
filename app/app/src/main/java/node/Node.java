@@ -1,10 +1,8 @@
 package node;
 
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.ArrayList;
 import java.util.List;
 
-import org.checkerframework.checker.units.qual.radians;
 import org.zeromq.SocketType;
 import org.zeromq.ZContext;
 import org.zeromq.ZLoop;
@@ -18,6 +16,7 @@ import org.zeromq.ZThread.IDetachedRunnable;
 import database.KeyValueDatabase;
 import database.ShopList;
 import java.time.Instant;
+import java.util.concurrent.*;
 
 public class Node {
     // ----------------------------------------------
@@ -35,7 +34,7 @@ public class Node {
     private final static int REP_TIMEOUT = 5 * 1000; // msecs
 
     private final static int alarm = 5 * 1000; // msecs
-    private final static boolean show_stats = true;
+    // private final static boolean show_stats = true;
     private final static boolean time_stats = true;
 
     private ZContext ctx;
@@ -59,7 +58,6 @@ public class Node {
     private final static String READ_REP = "READREP";
     private final static String WRITE_REQ = "WRITE";
     private final static String WRITE_REP = "WRITEREP";
-    private final static String END_OF_MESSAGE = "ENDOFMESSAGE";
     private final static String WRITE_FAIL = "WRITEFAIL";
     private final static String READ_FAIL = "READFAIL";
 
@@ -101,7 +99,7 @@ public class Node {
                     int addr = Integer.parseInt(kvMsg.getProp("addr"));
 
                     if (node.tokenAddrsMap.containsKey(t)) {
-                        if (node.tokenAddrsMap.get(t) != addr){
+                        if (node.tokenAddrsMap.get(t) != addr) {
                             System.out.println("I: update token " + t);
                             node.tokenAddrsMap.replace(t, addr);
                         }
@@ -172,11 +170,11 @@ public class Node {
             if (kvMsg == null) {
                 break; // Interrupted
             }
-            
+
             if (kvMsg.getKey().equals(REP_SNAPSHOT)) {
                 String[] body = new String(kvMsg.body(), ZMQ.CHARSET).split("\n");
                 int size = Integer.parseInt(kvMsg.getProp("size"));
- 
+
                 for (int i = 0; i < size;) {
 
                     Long new_token = Long.parseLong(body[i++]);
@@ -276,8 +274,7 @@ public class Node {
                     System.out.println("E: bad write request in node, aborting");
                     return -1;
                 }
-            }
-            else if (request.getKey().startsWith(READ_REQ)) {
+            } else if (request.getKey().startsWith(READ_REQ)) {
                 String db_key = request.getProp("db_key");
                 ShopList shopList = node.kvdb.containsKey(db_key) ? (ShopList) node.kvdb.get(db_key) : new ShopList();
                 kvmsg response = new kvmsg(0);
@@ -297,8 +294,7 @@ public class Node {
 
                 socket.sendMore(identity);
                 response.send(socket);
-            }
-            else {
+            } else {
                 System.out.println("E: bad request, aborting");
                 return -1;
             }
@@ -312,7 +308,6 @@ public class Node {
         public int handle(ZLoop loop, PollItem item, Object arg) {
 
             System.out.println("Received request ");
-
 
             Node node = (Node) arg;
             Socket socket = item.getSocket(); // Router socket
@@ -335,105 +330,219 @@ public class Node {
         }
 
         private void fowardReadRequest(Node node, Socket socket, byte[] identity, kvmsg request) {
-
-            request.setProp("sender", SNDR_NODE);
-            Socket dealer = node.updateDealer();
-            request.send(dealer);
-
-            boolean self = false;
-            int read_count = 0;
-            int read_quorum = node.getReadQuorum();
-            Long timeout = System.currentTimeMillis() + REP_TIMEOUT;
-
-            while (System.currentTimeMillis() < timeout && read_count < read_quorum) {
-                kvmsg rcv = kvmsg.recv(dealer);
-                if (rcv == null)
-                    continue; // Interrupted
-                if (rcv.getKey().equals(READ_REP)) {
-                    read_count++;
-                }
-                if (rcv.getProp("sender").equals(node.getToken().toString())) {
-                    self = true;
-                }
-                if (read_count >= read_quorum && self) {
-                    socket.sendMore(identity);
-                    // Solve conflict
-                    rcv.setProp("sender", node.getToken().toString());
-                    rcv.setProp("status", "OK");
-                    rcv.send(socket);
-                    return;
-                }
+            System.out.println("Foward read request");
+            List<Integer> nextNodesAddr = new ArrayList<>(node.nextNodesAddr());
+            int readQuorum = node.getReadQuorum();
+            int replicationFactor = node.getReplicationFactor();
+            if (nextNodesAddr.isEmpty()) {
+                System.out.println("E: no nodes available");
+                return;
+            } else if (nextNodesAddr.size() < node.getReplicationFactor()) {
+                replicationFactor = nextNodesAddr.size();
+                readQuorum = replicationFactor - 1;
             }
 
-            // Failed to read from quorum
+            kvmsg[] responses = new kvmsg[replicationFactor];
+
+            kvmsg readRequest = new kvmsg(0);
+            readRequest.setKey(READ_REQ);
+            readRequest.setProp("db_key", request.getProp("db_key"));
+            readRequest.setProp("sender", SNDR_NODE);
+            readRequest.fmtBody("%s", new String(request.body(), ZMQ.CHARSET));
+
+            // remove self addr from nextNodesAddr
+            System.out.println(nextNodesAddr);
+            int selfAddr = node.getPort();
+            nextNodesAddr.remove((Integer) selfAddr);
+            
+            List<Thread> threads = new ArrayList<>();
+            
+            // Add self to threads
+            threads.add( new Thread( () -> {
+                responses[0] = node_thread(node.ctx, node.getPort() + 1, readRequest);
+            }));
+
+            // Add other nodes to threads
+            for (int i = 1; i < replicationFactor; i++) {
+                int port = nextNodesAddr.get(i - 1);
+                final int index = i;
+                threads.add( new Thread( () -> {
+                    responses[index] = node_thread(node.ctx, port +1, readRequest);
+                }));
+            }
+
+            // Start all threads
+            for (Thread thread : threads) {
+                thread.start();
+            }
+
+            // wait for the first thread to finish
+            List<kvmsg> responsesList = new ArrayList<>(); 
+            try {
+                threads.get(0).join();
+                threads.remove(0);
+                responsesList.add(responses[0]);
+                readQuorum -= 1;
+
+                while (readQuorum > 0) {
+                    for (Thread thread : threads) {
+                        if (!thread.isAlive()) {
+                            responsesList.add(responses[threads.indexOf(thread)]);
+                            readQuorum -= 1;
+                            threads.remove(thread);
+                        }
+                    }
+                }
+                // Kill all remaining threads
+                for (Thread thread : threads) {
+                    thread.interrupt();
+                }
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+            catch (Exception e) {
+                e.printStackTrace();
+            }
+
+
+            if (responsesList.size() > 0) {
+                // Solve conflicts
+                socket.sendMore(identity);
+                try {
+                    responsesList.get(0).send(socket);
+                    return;
+                } catch (Exception e) {
+                    
+                }
+                System.err.println("Solved read conflicts");
+            }
             kvmsg response = new kvmsg(0);
             response.setKey(READ_REP);
             response.setProp("sender", node.getToken().toString());
+            response.setProp("db_key", request.getProp("db_key"));
+            response.setProp("timestamp", "%s", Instant.now().toString());
+            response.setProp("items", Integer.toString(0));
             response.setProp("status", READ_FAIL);
-            socket.sendMore(identity);
+
             response.send(socket);
+            
+            System.out.println("Sent bad read response");
+
+            
         }
-
         private static void fowardWriteRequest(Node node, Socket socket, byte[] identity, kvmsg request) {
-            Socket dealer = node.updateDealer();
-            while (request.getKey().startsWith(WRITE_REQ)) {
-                request.setProp("sender", SNDR_NODE);
-                dealer.sendMore(identity);
-                request.send(dealer);
-
-                kvmsg rcv = kvmsg.recv(dealer);
-                if (rcv == null)
-                    return; // Interrupted
-            }
-            // End of write request
-            if (request.getKey().startsWith(END_OF_MESSAGE)) {
-                request.setProp("sender", SNDR_NODE);
-                dealer.sendMore(identity);
-                request.send(dealer);
-            } else {
-                System.out.println("E: bad request, aborting");
+            System.out.println("Foward write request");
+            List<Integer> nextNodesAddr = new ArrayList<>(node.nextNodesAddr());
+            int writeQuorum = node.getWriteQuorum();
+            int replicationFactor = node.getReplicationFactor();
+            if (nextNodesAddr.isEmpty()) {
+                System.out.println("E: no nodes available");
                 return;
+            } else if (nextNodesAddr.size() < node.getReplicationFactor()) {
+                replicationFactor = nextNodesAddr.size();
+                writeQuorum = replicationFactor - 1;
+            }
+            
+            kvmsg[] responses = new kvmsg[replicationFactor];
+
+            kvmsg writeRequest = new kvmsg(0);
+            writeRequest.setKey(WRITE_REQ);
+            writeRequest.setProp("db_key", request.getProp("db_key"));
+            writeRequest.setProp("sender", SNDR_NODE);
+            writeRequest.setProp("timestamp", "%s", request.getProp("timestamp"));
+            writeRequest.setProp("items", request.getProp("items"));
+            writeRequest.fmtBody("%s", new String(request.body(), ZMQ.CHARSET));
+
+            List<Thread> threads = new ArrayList<>();
+        
+            // Add other nodes to threads
+            for (int i = 1; i < replicationFactor; i++) {
+                int port = nextNodesAddr.get(i - 1);
+                final int index = i;
+                threads.add( new Thread( () -> {
+                    responses[index] = node_thread(node.ctx, port +1, writeRequest);
+                }));
             }
 
-            // Receive response from nodes
-            int write_count = 0;
-            int write_quorum = node.getWriteQuorum();
+            // Start all threads
+            for (Thread thread : threads) {
+                thread.start();
+            }
 
-            Long timeout = System.currentTimeMillis() + REP_TIMEOUT;
+            
+            // wait for the firsts writeQuorum threads to finish
+            List<kvmsg> responsesList = new ArrayList<>();
 
-            while (System.currentTimeMillis() < timeout && write_count < write_quorum) {
-                kvmsg rcv = kvmsg.recv(dealer);
-                if (rcv == null)
-                    continue; // Interrupted
-                if (rcv.getKey().equals(WRITE_REP)) {
-                    if (rcv.getProp("status").equals("OK")) {
-                        write_count++;
+            try {
+                while (writeQuorum > 0) {
+                    for (int i = 0; i < threads.size(); i++) {
+                        Thread thread = threads.get(i);
+                        if (!thread.isAlive()) {
+                            responsesList.add(responses[i + 1]);
+                            writeQuorum -= 1;
+                            threads.remove(thread);
+                        }
                     }
                 }
-            }
-            if (write_count == write_quorum) {
-                kvmsg response = new kvmsg(0);
-                response.setKey(WRITE_REP);
-                response.setProp("sender", node.getToken().toString());
-                response.setProp("status", "OK");
 
+                // Wait for all threads to finish // REMOVE THIS
+                for (Thread thread : threads) {
+                    thread.join();
+                }
+
+
+
+                // Solve conflicts
                 socket.sendMore(identity);
-                response.send(socket);
+                responsesList.get(0).send(socket);
+                return;
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+
+            kvmsg response = new kvmsg(0);
+            response.setKey(WRITE_REP);
+            response.setProp("sender", node.getToken().toString());
+            response.setProp("db_key", request.getProp("db_key"));
+            response.setProp("status", WRITE_FAIL);
+
+            
+        }
+
+        private static kvmsg node_thread(ZContext ctx, int port, kvmsg readRequest) {
+            // Print the request
+            //System.out.println("\nReceived request: ");
+            //System.out.println("Client received request: ");
+            //System.out.println("Key: " + readRequest.getKey());
+            //System.out.println("Sender: " + readRequest.getProp("sender"));
+            //System.out.println("DB Key: " + readRequest.getProp("db_key"));
+            //System.out.println("\n\n");
+
+            System.out.println("THREAD OPENED ON PORT: " + port);
+
+            Socket dealer = ctx.createSocket(SocketType.DEALER);
+            dealer.connect("tcp://localhost:" + port );
+
+            readRequest.send(dealer);
+            ZMQ.Poller poller = ctx.createPoller(1);
+            poller.register(dealer, ZMQ.Poller.POLLIN);
+
+            if (poller.poll(5000) > 0 ) {
+                // Handle the response from the router
+                System.out.println("Client received response from node in port" + port);
+                return kvmsg.recv(dealer);
+            } else {
+                System.out.println("Client timed out");
+                return null;
             }
         }
+
+
     };
 
     // ----------------------------------------------
-    public Socket updateDealer() {
-        // Update dealer socket
-        dealer.close();
-        dealer = ctx.createSocket(SocketType.DEALER);
-        List<Integer> next= nextNodeAddr();
-        for (int port : next) {
-            System.out.println("Connecting to tcp://localhost:" + port);
-            dealer.connect("tcp://localhost:" + port);
-        }
-        return this.dealer;
+    private int getReplicationFactor() {
+        return replicationFactor;
     }
 
     public int getWriteQuorum() {
@@ -444,25 +553,22 @@ public class Node {
         return readQuorum;
     }
 
-    public List<Integer> nextNodeAddr() {
+    public List<Integer> nextNodesAddr() {
         List<Long> neeededTokens = new ArrayList<>();
         List<Long> ring = new ArrayList<>(tokenAddrsMap.keySet());
 
         System.out.println("Search for token: " + token);
         int index = ring.indexOf(token);
 
-        while (true){
-            System.out.println(tokenAddrsMap.keySet().size());
-            if (neeededTokens.size() == replicationFactor) {
-                break;
-            }
+        for (int i = 0; i < getReplicationFactor(); i++) {
+            index = (index + 1) % ring.size();
+            neeededTokens.add(ring.get(index));
         }
-        
-        return neeededTokens.stream().map(token -> tokenAddrsMap.get(token)).toList();
-    }
 
-    private int getReplicationFactor() {
-        return replicationFactor;
+        // Remove duplicates
+        neeededTokens = neeededTokens.stream().distinct().toList();
+
+        return neeededTokens.stream().map(token -> tokenAddrsMap.get(token)).toList();
     }
 
     public int getPort() {
@@ -513,7 +619,6 @@ public class Node {
         public void run(Object[] args) {
             Node node = (Node) args[0];
 
-
             ZLoop loop = new ZLoop(node.ctx);
             loop.verbose(false);
             PollItem poller = new PollItem(node.node_router, ZMQ.Poller.POLLIN);
@@ -553,7 +658,6 @@ public class Node {
 
         ZThread.start(new node_worker(), this);
         ZThread.start(new client_worker(), this);
-
 
         loop.start();
 
