@@ -8,6 +8,8 @@ import org.zeromq.ZLoop.IZLoopHandler;
 import org.zeromq.ZMQ.PollItem;
 import org.zeromq.ZMQ.Socket;
 
+import com.google.common.base.Strings;
+
 import database.KeyValueDatabase;
 import database.ShopList;
 
@@ -235,10 +237,15 @@ public class Node {
                     ShopList value = ShopList.deserialize(body); // Items
 
                     // Update the timestamp
-                    value.setTimeStamp(Instant.parse(request.getProp("timestamp")));
+                    System.out.println("HERE");
+                    request.dump();
+                    String timestamp = request.getProp("timestamp");
+                    System.out.println(timestamp);
+                    value.setTimeStamp(Instant.parse(timestamp));
                     // May have concurrency issues
                     // TODO: Check if the timestamp is more recent
                     node.database.put(key, value);
+                    System.out.println("Updated database on key " + key);
 
                     kvmsg reply = new kvmsg(0);
                     reply.setKey(WRITE_REP);

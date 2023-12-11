@@ -229,6 +229,8 @@ public class Proxy {
             kvmsg request = new kvmsg(0);
             request.setKey(task.getKey());
             request.setProp("db_key", task.getProp("db_key"));
+            if (!task.getProp("timestamp").equals(""))
+                request.setProp("timestamp", task.getProp("timestamp"));
             String body = new String(task.body(), ZMQ.CHARSET);
             request.fmtBody("%s", body);
 
@@ -256,7 +258,6 @@ public class Proxy {
                 long timeout = System.currentTimeMillis() + TIMEOUT;
                 boolean self = false;
                 while (readQuorum > 0 && System.currentTimeMillis() < timeout && !self) {
-                    System.out.println("HERERERERER");
                     if (!threads.get(0).isAlive()) {
                         if (reply[0] != null) {
                             if (reply[0].getKey().equals(READ_REP)) {
@@ -279,17 +280,7 @@ public class Proxy {
                         }
                     }
                 }
-                System.out.println("END of loop read");
-                // Kill all remaining threads
-                try {
-                    for (int idx = 0; idx < threads.size(); idx++) {
-                        if (threads.get(idx).isAlive()) {
-                            threads.get(idx).interrupt();
-                        }
-                    }
-                } catch (Exception e) {
-                    //System.out.println("E: " + e);
-                }
+                System.out.println("END of READ loop");
 
                 // Solve conflicts
                 if (reply[0] != null) {
@@ -310,8 +301,64 @@ public class Proxy {
 
                 }
 
-            } else {
-                System.out.println("E: bad request: not a read request");
+            }
+            else if (request.getKey().equals(WRITE)){
+                List<Integer> ports = tokenThread.node.getPorts(tokenThread.token);
+                kvmsg[] reply = new kvmsg[ports.size()];
+                List<SingleRequest> threads = new ArrayList<SingleRequest>();
+
+                for (int i = 0; i < ports.size(); i++) {
+                    System.out.println("Sending request to port: " + ports.get(i));
+                    threads.add(new SingleRequest(tokenThread.node.ctx, ports.get(i), request, reply, i));
+                    threads.get(i).setName("Thread " + Integer.toString(i));
+                    threads.get(i).start();
+                }
+
+                int readQuorum = Math.min(READ_QUORUM, ports.size());
+                System.out.println(threads.size() + "\t" + readQuorum);
+                long timeout = System.currentTimeMillis() + TIMEOUT;
+                
+                while (readQuorum > 0 && System.currentTimeMillis() < timeout) {
+                    for (int idx = 0; idx < threads.size(); idx++) {
+                        if (!threads.get(idx).isAlive()) {
+                            if (reply[idx] != null) {
+                                if (reply[idx].getKey().equals(READ_REP)) {
+                                    if (reply[idx].getProp("status").equals(OK)) {
+                                        readQuorum--;
+                                    }
+                                }
+                            } else {
+                                // Resend request
+                                threads.get(idx).start();
+                            }
+                        }
+                    }
+                }
+                System.out.println("END of WRIE loop");
+
+
+                // Solve conflicts
+                if (reply[0] != null) {
+                    tokenThread.node.router.sendMore(identity);
+                    reply[0].send(tokenThread.node.router);
+                }
+                else {
+                    System.out.println("E: no reply from self");
+
+                    kvmsg replyMsg = new kvmsg(0);
+                    replyMsg.setKey(WRITE_REP);
+                    replyMsg.setProp("status", FAIL);
+                    replyMsg.setProp("timestamp", "");
+                    replyMsg.setProp("db_key", request.getProp("db_key"));
+
+                    tokenThread.node.router.sendMore(identity);
+                    replyMsg.send(tokenThread.node.router);
+
+                }
+
+            }
+            else {
+                System.out.println("E: bad request: not a read/write request");
             }
             return 0;
         }
@@ -462,13 +509,28 @@ public class Proxy {
             this.dealer.connect("tcp://localhost:" + port);
             System.out.println("THREAD OPENED ON PORT: " + port);
 
-            int tries = 2;
+            request.send(dealer);
+
+            // Set up a poller to wait for responses with a timeout
+            ZMQ.Poller poller = ctx.createPoller(1);
+            poller.register(this.dealer, ZMQ.Poller.POLLIN);
 
             request.send(dealer);
 
-            this.reply[idx] = null;
-            this.reply[idx] = kvmsg.recv(this.dealer);
-            System.out.println("Received reply from THREAD on port: " + port);
+            // Wait for a response or timeout
+            if (poller.poll(1000 /* timeout in milliseconds */) == 0) {
+                // No response within the timeout, decide what to do (close the thread, retry,
+                // etc.)
+                System.out.println("Timeout reached. Closing thread on port: " + port);
+            } else {
+                // There is a response, proceed with handling it
+                this.reply[idx] = kvmsg.recv(this.dealer);
+                System.out.println("Received reply from THREAD on port: " + port);
+            }
+
+            // Clean up resources
+            poller.close();
+            dealer.close();
         }
     }
 
