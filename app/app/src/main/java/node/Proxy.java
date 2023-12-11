@@ -5,14 +5,12 @@ import java.util.List;
 import java.util.ArrayList;
 import java.util.HashSet;
 
-import org.checkerframework.checker.units.qual.h;
 import org.zeromq.SocketType;
 import org.zeromq.ZContext;
 import org.zeromq.ZLoop;
 import org.zeromq.ZLoop.IZLoopHandler;
 import org.zeromq.ZMQ;
 import org.zeromq.ZMQ.PollItem;
-import org.zeromq.ZMQ.Poller;
 import org.zeromq.ZMQ.Socket;
 
 public class Proxy {
@@ -38,15 +36,11 @@ public class Proxy {
     private final static String OK = "OK"; // OK
     private final static String FAIL = "FAIL"; // FAIL
 
-    private final static String HEARTBEAT = "HEARTBEAT"; // Heartbeat
     private final static int HEARTBEAT_INTERVAL = 1000 * 3; // msecs
-    private final static int TTL = HEARTBEAT_INTERVAL * 2; // Heartbeat TTL
     private final static int TIMEOUT = 1000 * 3; // msecs
     // -----------------------------------------------
     // Communication Channels
     private ZContext ctx;
-
-    private long sequence = 0;
 
     private Socket snapshot; // Sends snapshot request
     private Socket subscriber; // Collects hash ring updates
@@ -58,7 +52,7 @@ public class Proxy {
     // -----------------------------------------------
     // Debugging
     private static boolean token_status = false;
-    private static boolean health_status = false;
+    //private static boolean health_status = false;
 
     // -----------------------------------------------
     // Ring manipulation
@@ -132,7 +126,6 @@ public class Proxy {
             return; // Interrupted
         if (reply.getKey().equals(SNAP_REP)) {
 
-            sequence = reply.getSequence();
             // Update the hash ring
             int size = !reply.getProp("size").equals("")
                     ? Integer.parseInt(reply.getProp("size"))
@@ -159,7 +152,6 @@ public class Proxy {
 
             if (update.getKey().equals(FLUSH)) {
                 try {
-                    node.sequence = update.getSequence();
                     Long token = Long.parseLong(update.getProp("token"));
                     // Remove token from hash ring if it exists
                     if (node.hashring.containsKey(token)) {
@@ -314,17 +306,17 @@ public class Proxy {
                     threads.get(i).start();
                 }
 
-                int readQuorum = Math.min(READ_QUORUM, ports.size());
-                System.out.println(threads.size() + "\t" + readQuorum);
+                int writeQorum = Math.min(WRITE_QUORUM, ports.size());
+                System.out.println(threads.size() + "\t" + writeQorum);
                 long timeout = System.currentTimeMillis() + TIMEOUT;
                 
-                while (readQuorum > 0 && System.currentTimeMillis() < timeout) {
+                while (writeQorum > 0 && System.currentTimeMillis() < timeout) {
                     for (int idx = 0; idx < threads.size(); idx++) {
                         if (!threads.get(idx).isAlive()) {
                             if (reply[idx] != null) {
                                 if (reply[idx].getKey().equals(READ_REP)) {
                                     if (reply[idx].getProp("status").equals(OK)) {
-                                        readQuorum--;
+                                        writeQorum--;
                                     }
                                 }
                             } else {

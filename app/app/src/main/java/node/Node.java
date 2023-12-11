@@ -8,8 +8,6 @@ import org.zeromq.ZLoop.IZLoopHandler;
 import org.zeromq.ZMQ.PollItem;
 import org.zeromq.ZMQ.Socket;
 
-import com.google.common.base.Strings;
-
 import database.KeyValueDatabase;
 import database.ShopList;
 
@@ -22,8 +20,6 @@ public class Node {
     private final static int MAIN_NODE_PORT = 5556;
     // -----------------------------------------------
     // Predifined Messages
-    private final static String SNAP = "SNAP"; // Snapshot Request
-    private final static String SNAP_REP = "SNAP_REP"; // Snapshot Reply
     private final static String FLUSH = "FLUSH"; // Flush
     private final static String UPDATE = "UPDATE"; // Update
 
@@ -61,42 +57,13 @@ public class Node {
     private static boolean health_status = false;
 
     // -----------------------------------------------
-    // Request memory snapshot from main node
-    private void snapshot() {
-        System.out.println("Requesting snapshot from main node");
-        kvmsg request = new kvmsg(0);
-        request.setKey(SNAP);
-
-        request.send(snapshot);
-        // TODO: TIMEOUT
-        kvmsg reply = kvmsg.recv(snapshot); // Wait for snapshot
-        if (reply == null)
-            return; // Interrupted
-        if (reply.getKey().equals(SNAP_REP)) {
-
-            sequence = reply.getSequence();
-            // Update the hash ring
-            int size = !reply.getProp("size").equals("")
-                    ? Integer.parseInt(reply.getProp("size"))
-                    : 0;
-
-            String body = new String(reply.body(), ZMQ.CHARSET);
-            String[] node = body.split("\n");
-            for (int i = 0; i < size; i++) {
-                String[] instance = node[i].split(",");
-                hashring.put(Long.parseLong(instance[0]), Integer.parseInt(instance[1]));
-                System.out.println("Added node " + instance[0] + " to the hash ring");
-            }
-        }
-    }
-
     // Send heartbeats to the main node
     private static class Heartbeat implements IZLoopHandler {
         @Override
         public int handle(ZLoop loop, PollItem item, Object arg) {
             Node node = (Node) arg;
 
-            kvmsg heartbeat = new kvmsg(0);
+            kvmsg heartbeat = new kvmsg(node.sequence);
             heartbeat.setKey(HEARTBEAT);
             heartbeat.setProp("token", Long.toString(node.token));
             heartbeat.setProp("port", Integer.toString(node.port));
@@ -118,6 +85,8 @@ public class Node {
             kvmsg update = kvmsg.recv(node.subscriber);
             if (update == null)
                 return -1; // Interrupted
+
+            node.sequence = update.getSequence();
 
             if (update.getKey().equals(FLUSH)) {
                 try {

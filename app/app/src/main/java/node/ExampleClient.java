@@ -1,6 +1,5 @@
 package node;
 
-import org.checkerframework.checker.units.qual.s;
 import org.zeromq.SocketType;
 import org.zeromq.ZMQ;
 import org.zeromq.ZContext;
@@ -11,16 +10,7 @@ import java.time.Instant;
 
 public class ExampleClient
 {
-    // -----------------------------------------------
-    // Constants
-    private final static int MAIN_NODE_PORT = 5556;
 
-    // -----------------------------------------------
-    // Predifined Messages
-    private final static String SNAP = "SNAP"; // Snapshot Request
-    private final static String SNAP_REP = "SNAP_REP"; // Snapshot Reply
-    private final static String FLUSH = "FLUSH"; // Flush
-    private final static String UPDATE = "UPDATE"; // Update
 
     private final static String READ = "READ"; // Read
     private final static String READ_REP = "READ_REP"; // Read Reply
@@ -29,9 +19,7 @@ public class ExampleClient
     private final static String OK = "OK"; // OK
     private final static String FAIL = "FAIL"; // FAIL
 
-    private final static String HEARTBEAT = "HEARTBEAT"; // Heartbeat
-    private final static int HEARTBEAT_INTERVAL = 1000 * 3; // msecs
-    private final static int TTL = HEARTBEAT_INTERVAL * 2; // Heartbeat TTL
+
     // -----------------------------------------------
 
     public static void main(String[] args)

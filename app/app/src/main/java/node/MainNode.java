@@ -48,7 +48,6 @@ public class MainNode {
         public String toString() {
             return token.toString() + "," + port +"\n";
         }
-        Node () {}
         Node(Long t, int p, long ttl) {
             token = t;
             port = p;
