@@ -57,8 +57,10 @@ public class kvmsg
         byte[] msg = frame[FRAME_PROPS];
         props_size = msg.length;
         props.clear();
+        if (msg.length == 0)
+            return;
 
-        System.out.println("" + msg.length + " :" + new String(msg, ZMQ.CHARSET));
+        //System.out.println("" + msg.length + " :" + new String(msg, ZMQ.CHARSET));
         for (String prop : new String(msg, ZMQ.CHARSET).split("\n")) {
             String[] split = prop.split("=");
             props.setProperty(split[0], split[1]);
