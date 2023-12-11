@@ -1,25 +1,29 @@
 package proj;
 
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.List;
+import java.util.ArrayList;
+import java.util.HashSet;
+
+import org.checkerframework.checker.units.qual.h;
 import org.zeromq.SocketType;
 import org.zeromq.ZContext;
 import org.zeromq.ZLoop;
-import org.zeromq.ZMQ;
 import org.zeromq.ZLoop.IZLoopHandler;
+import org.zeromq.ZMQ;
 import org.zeromq.ZMQ.PollItem;
+import org.zeromq.ZMQ.Poller;
 import org.zeromq.ZMQ.Socket;
-
-import database.KeyValueDatabase;
-import database.ShopList;
-import node.LoadBalancer;
-
-import java.time.Instant;
-import java.util.concurrent.*;
 
 public class Proxy {
     // -----------------------------------------------
     // Constants
     private final static int PROXY_PORT = 5555;
     private final static int MAIN_NODE_PORT = 5556;
+
+    private final static int REPLICATION_FACTOR = 3;
+    private final static int READ_QUORUM = 2;
+    private final static int WRITE_QUORUM = 2;
     // -----------------------------------------------
     // Predifined Messages
     private final static String SNAP = "SNAP"; // Snapshot Request
@@ -37,6 +41,7 @@ public class Proxy {
     private final static String HEARTBEAT = "HEARTBEAT"; // Heartbeat
     private final static int HEARTBEAT_INTERVAL = 1000 * 3; // msecs
     private final static int TTL = HEARTBEAT_INTERVAL * 2; // Heartbeat TTL
+    private final static int TIMEOUT = 1000 * 3; // msecs
     // -----------------------------------------------
     // Communication Channels
     private ZContext ctx;
@@ -45,13 +50,73 @@ public class Proxy {
 
     private Socket snapshot; // Sends snapshot request
     private Socket subscriber; // Collects hash ring updates
+
+    private Socket router; // Receives requests from clients
     // -----------------------------------------------
     // HashRing
     private ConcurrentHashMap<Long, Integer> hashring;
     // -----------------------------------------------
     // Debugging
-    private static boolean token_status = true;
+    private static boolean token_status = false;
     private static boolean health_status = false;
+
+    // -----------------------------------------------
+    // Ring manipulation
+    public static long hashStringToLong(String input) {
+        // Use the hashCode() method of the String class
+        int hashCode = input.hashCode();
+
+        // Convert the hashCode to a positive long value
+        long positiveHash = hashCode & 0xffffffffL;
+
+        // Ensure the result is greater than 0
+        return positiveHash > 0 ? positiveHash : -positiveHash;
+    }
+
+    private Long chooseTargetServer(String key) {
+
+        // Hash funtion string -> long
+        Long hash = hashStringToLong(key);
+
+        // Find the index of the first token that is greater than hash
+        List<Long> tokens = new ArrayList<Long>(hashring.keySet());
+        int index = 0;
+        for (Long t : tokens) {
+            if (t > hash) {
+                break;
+            }
+            index++;
+        }
+
+        // If index is out of bound, then the target server is the first server
+        if (index == tokens.size()) {
+            index = 0;
+        }
+
+        return tokens.get(index);
+    }
+
+    private List<Integer> getPorts(long token) {
+        List<Integer> ports = new ArrayList<Integer>();
+        int replication = REPLICATION_FACTOR;
+
+        List<Long> tokens = new ArrayList<Long>(hashring.keySet());
+        int idx = tokens.indexOf(token);
+        System.out.println("TOKEN: " + new ArrayList<Integer>(hashring.values()) + "\t" + "Size: " + tokens.size()
+                + "\t" + "IDX: " + idx);
+        while (replication > 0) {
+            if (idx == tokens.size()) {
+                idx = 0;
+            }
+            ports.add(hashring.get(tokens.get(idx)));
+            idx++;
+            replication--;
+        }
+        // Remove duplicates
+        ports = new ArrayList<Integer>(new HashSet<Integer>(ports));
+
+        return ports;
+    }
 
     // -----------------------------------------------
     // Request memory snapshot from main node
@@ -155,27 +220,103 @@ public class Proxy {
     private static class HandleRequest implements IZLoopHandler {
         @Override
         public int handle(ZLoop loop, PollItem item, Object arg) {
-            Proxy node = (Proxy) arg;
-            byte[] identity = item.getSocket().recv(0);
-            if (identity == null)
+            TokenRequest tokenThread = (TokenRequest) arg;
+            kvmsg task = kvmsg.recv(item.getSocket());
+            if (task == null)
                 return 0; // Interrupted
-            kvmsg request = kvmsg.recv(item.getSocket());
-            if (request == null)
-                return 0; // Interrupted
+            byte[] identity = ByteToString.decodeFromString(task.getProp("id"));
             
+            kvmsg request = new kvmsg(0);
+            request.setKey(task.getKey());
+            request.setProp("db_key", task.getProp("db_key"));
+            String body = new String(task.body(), ZMQ.CHARSET);
+            request.fmtBody("%s", body);
+
             if (request.getKey().equals(READ)) {
+                List<Integer> ports = tokenThread.node.getPorts(tokenThread.token);
+                kvmsg[] reply = new kvmsg[ports.size()];
+                List<SingleRequest> threads = new ArrayList<SingleRequest>();
 
-            }
-            else if (request.getKey().equals(WRITE)) {
+                ports.remove(ports.indexOf(tokenThread.node.hashring.get(tokenThread.token)));
+                threads.add(new SingleRequest(tokenThread.node.ctx, tokenThread.node.hashring.get(tokenThread.token),
+                        request, reply, 0));
+                threads.get(0).setName("Thread 0");
+                threads.get(0).start();
 
-            }
-            else {
-                System.out.println("E: bad request: not a read or write");
-                return 0;
+                for (int i = 0; i < ports.size(); i++) {
+                    System.out.println("Sending request to port: " + ports.get(i));
+                    threads.add(new SingleRequest(tokenThread.node.ctx, ports.get(i), request, reply, i));
+                    int idx = i +1;
+                    threads.get(idx).setName("Thread " + Integer.toString(idx));
+                    threads.get(idx).start();
+                }
+
+                int readQuorum = Math.min(READ_QUORUM, ports.size() + 1);
+                System.out.println(threads.size() + "\t" + readQuorum);
+                long timeout = System.currentTimeMillis() + TIMEOUT;
+                boolean self = false;
+                while (readQuorum > 0 && System.currentTimeMillis() < timeout && !self) {
+                    System.out.println("HERERERERER");
+                    if (!threads.get(0).isAlive()) {
+                        if (reply[0] != null) {
+                            if (reply[0].getKey().equals(READ_REP)) {
+                                self = true;
+                            }
+                        }
+                    }
+                    for (int idx = 0; idx < threads.size(); idx++) {
+                        if (!threads.get(idx).isAlive()) {
+                            if (reply[idx] != null) {
+                                if (reply[idx].getKey().equals(READ_REP)) {
+                                    if (reply[idx].getProp("status").equals(OK)) {
+                                        readQuorum--;
+                                    }
+                                }
+                            } else {
+                                // Resend request
+                                threads.get(idx).start();
+                            }
+                        }
+                    }
+                }
+                System.out.println("END of loop read");
+                // Kill all remaining threads
+                try {
+                    for (int idx = 0; idx < threads.size(); idx++) {
+                        if (threads.get(idx).isAlive()) {
+                            threads.get(idx).interrupt();
+                        }
+                    }
+                } catch (Exception e) {
+                    //System.out.println("E: " + e);
+                }
+
+                // Solve conflicts
+                if (reply[0] != null) {
+                    tokenThread.node.router.sendMore(identity);
+                    reply[0].send(tokenThread.node.router);
+                }
+                else {
+                    System.out.println("E: no reply from self");
+
+                    kvmsg replyMsg = new kvmsg(0);
+                    replyMsg.setKey(READ_REP);
+                    replyMsg.setProp("status", FAIL);
+                    replyMsg.setProp("timestamp", "");
+                    replyMsg.setProp("db_key", request.getProp("db_key"));
+
+                    tokenThread.node.router.sendMore(identity);
+                    replyMsg.send(tokenThread.node.router);
+
+                }
+
+            } else {
+                System.out.println("E: bad request: not a read request");
             }
             return 0;
         }
     }
+
     // -----------------------------------------------
     // Thread to handle main communication
     private static class Central extends Thread {
@@ -189,34 +330,148 @@ public class Proxy {
         public void run() {
             Proxy node = (Proxy) args[0];
             ZLoop loop = new ZLoop(node.ctx);
-
             PollItem sub = new PollItem(node.subscriber, ZMQ.Poller.POLLIN);
             loop.addPoller(sub, new ReceiveUpdate(), node);
             if (token_status) {
                 loop.addTimer(HEARTBEAT_INTERVAL * 2, 0, new PrintStatus(), node);
             }
-
             loop.start();
         }
     }
+
     // Main Worker
-    private static class MainWorker extends Thread{
+    private static class MainWorker extends Thread {
         Proxy node;
-        Socket router;
-        MainWorker(Proxy node){
+        ConcurrentHashMap<Long, Thread> workers;
+
+        MainWorker(Proxy node) {
             this.node = node;
         }
-        @Override
-        public void run(){
-            ZLoop loop = new ZLoop(node.ctx);
-            router = node.ctx.createSocket(SocketType.ROUTER);
-            router.bind("tcp://*:" + PROXY_PORT);
 
-            PollItem routerItem = new PollItem(router, ZMQ.Poller.POLLIN);
-            loop.addPoller(routerItem, new HandleRequest(), node);
+        @Override
+        public void run() {
+            node.router = node.ctx.createSocket(SocketType.ROUTER);
+            node.router.bind("tcp://*:" + PROXY_PORT);
+            workers = new ConcurrentHashMap<Long, Thread>();
+            System.out.println("Main worker started on port: " + PROXY_PORT);
+
+            while (!Thread.currentThread().isInterrupted()) {
+                byte[] identity = node.router.recv(0);
+                if (identity == null)
+                    break; // Interrupted
+                kvmsg request = kvmsg.recv(node.router);
+                if (request == null)
+                    break; // Interrupted
+                if (node.hashring.isEmpty()) {
+                    System.out.println("E: hash ring is empty");
+                    kvmsg replyMsg = new kvmsg(0);
+                    replyMsg.setKey(request.getKey() + "_REP");
+                    replyMsg.setProp("status", FAIL);
+                    replyMsg.setProp("db_key", request.getProp("db_key"));
+
+                    node.router.sendMore(identity);
+                    replyMsg.send(node.router);
+    
+                    continue;
+                }
+                String key = request.getProp("db_key");
+                Long token = node.chooseTargetServer(key);
+                if (workers.containsKey(token)) {
+                    if (!workers.get(token).isAlive()) {
+                        workers.remove(token);
+                        workers.put(token, new TokenRequest(new Object[] { node, token }));
+                        workers.get(token).setName("Token Thread" + token);
+                        workers.get(token).start();
+                    }
+                } else {
+                    workers.put(token, new TokenRequest(new Object[] { node, token }));
+                    workers.get(token).setName("Token Thread" + token);
+                    workers.get(token).start();
+                }
+                kvmsg task = new kvmsg(0);
+                System.out.println("Sending request " + request.getKey() + " to token: " + token);
+                task.setKey(request.getKey());
+                task.setProp("db_key", new String(request.getProp("db_key")));
+                if (!request.getProp("timestamp").equals(""))
+                    task.setProp("timestamp", request.getProp("timestamp"));
+
+                task.setProp("id", ByteToString.encodeToString(identity));
+                String body = new String(request.body(), ZMQ.CHARSET);
+                task.fmtBody("%s", body);
+
+                Socket boss = node.ctx.createSocket(SocketType.PUSH);
+                boss.connect("ipc://" + Long.toString(token) + ".ipc");
+                task.send(boss);
+
+            }
+        }
+    }
+
+    // Thread to handle server communication
+    private static class TokenRequest extends Thread {
+        Object args[];
+        Proxy node;
+        long token;
+        Socket puller;
+
+        TokenRequest(Object args[]) {
+            this.args = args;
+            this.token = (long) args[1];
+
+            node = (Proxy) args[0];
+            this.puller = node.ctx.createSocket(SocketType.PULL);
+            try {
+                this.puller.bind("ipc://" + Long.toString(token) + ".ipc");
+                System.out.println("Token request worker started on token: " + token);
+            } catch (Exception e) {
+                System.out.println("E: token already exists");
+                return;
+            }
+        }
+
+        @Override
+        public void run() {
+            Proxy node = (Proxy) args[0];
+            ZLoop loop = new ZLoop(node.ctx);
+            PollItem pull = new PollItem(this.puller, ZMQ.Poller.POLLIN);
+            loop.addPoller(pull, new HandleRequest(), this);
             loop.start();
         }
     }
+
+    // Single request worker
+    private static class SingleRequest extends Thread {
+        ZContext ctx;
+        Socket dealer;
+        kvmsg request;
+        int port = 0;
+        kvmsg[] reply;
+        int idx;
+
+        SingleRequest(ZContext ctx, int port, kvmsg request, kvmsg[] reply, int idx) {
+            this.ctx = ctx;
+            this.port = port;
+            this.request = request;
+            this.reply = reply;
+            this.idx = idx;
+        }
+
+        @Override
+        public void run() {
+            this.dealer = ctx.createSocket(SocketType.DEALER);
+            this.dealer.connect("tcp://localhost:" + port);
+            System.out.println("THREAD OPENED ON PORT: " + port);
+
+            int tries = 2;
+
+            request.send(dealer);
+
+            this.reply[idx] = null;
+            this.reply[idx] = kvmsg.recv(this.dealer);
+            System.out.println("Received reply from THREAD on port: " + port);
+        }
+    }
+
     // -----------------------------------------------
     // Constructor
     Proxy() {
@@ -243,13 +498,26 @@ public class Proxy {
         // Start the central thread
         Object args[] = { this };
         Central central = new Central(args);
+        MainWorker mainWorker = new MainWorker(this);
+
+        central.setName("Central");
+        mainWorker.setName("MainWorker");
+
         central.start();
+        mainWorker.start();
 
         // Wait for the central thread to finish
-        try {
-            central.join();
-        } catch (InterruptedException e) {
-            e.printStackTrace();
+        while (true) {
+            if (!central.isAlive()) {
+                System.out.println("Central thread finished");
+                mainWorker.interrupt();
+                break;
+            }
+            if (!mainWorker.isAlive()) {
+                System.out.println("Main worker finished");
+                central.interrupt();
+                break;
+            }
         }
     }
 

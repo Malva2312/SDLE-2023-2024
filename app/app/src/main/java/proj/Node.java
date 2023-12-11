@@ -180,6 +180,7 @@ public class Node {
     private static class DataRequests implements IZLoopHandler {
         @Override
         public int handle(ZLoop loop, PollItem item, Object arg) {
+            System.out.println("Handling data request");
             Node node = (Node) arg;
             Socket w_router = item.getSocket();
 
@@ -343,11 +344,14 @@ public class Node {
 
     // Run the node
     private void run() {
-        snapshot();
+        //snapshot();
 
         // Assert threads to variables
         Central central = new Central(new Object[] { this });
         Worker worker = new Worker(new Object[] { this });
+
+        central.setName("Central");
+        worker.setName("Worker");
 
         // Start the threads
         central.start();
