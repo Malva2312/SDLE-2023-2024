@@ -112,6 +112,23 @@ public void displayItems() {
         return formatter.format(lastUpdated);
     }
 
+    public static String serialize(ShopList shopList){
+        String serialized = "";
+        for (Item item : shopList.items.values()) {
+            serialized += item.getName() + "," + item.getQuantity() + "\n";
+        }
+        return serialized;
+    }
+    public static ShopList deserialize(String serialized){
+        ShopList shopList = new ShopList();
+        String[] lines = serialized.split("\n");
+        for (String line : lines) {
+            String[] item = line.split(",");
+            shopList.addItem(item[0], Integer.parseInt(item[1]));
+        }
+        return shopList;
+    }
+
     public static void main(String[] args) {
         // Example usage
         ShopList shopList = new ShopList();
