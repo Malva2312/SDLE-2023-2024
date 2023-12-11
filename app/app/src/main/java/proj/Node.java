@@ -14,7 +14,6 @@ import database.ShopList;
 import java.time.Instant;
 import java.util.concurrent.*;
 
-
 public class Node {
     // -----------------------------------------------
     // Constants
@@ -59,6 +58,7 @@ public class Node {
     // Debugging
     private static boolean token_status = false;
     private static boolean health_status = false;
+
     // -----------------------------------------------
     // Request memory snapshot from main node
     private void snapshot() {
@@ -191,7 +191,6 @@ public class Node {
                 System.out.println("E: bad request: null request");
                 return -1; // Interrupted
             }
-            request.dump();
             if (request.getKey().equals(READ)) {
                 try {
                     String key = request.getProp("db_key");
@@ -209,11 +208,10 @@ public class Node {
                     reply.setKey(READ_REP);
                     reply.setProp("db_key", key);
                     reply.setProp("timestamp", value.getInstant().toString());
-                    reply.setProp("size", Integer.toString(value.getItems().size()));
 
                     String body = ShopList.serialize(value);
                     reply.fmtBody("%s", body);
-                    
+
                     reply.setProp("status", OK);
                     w_router.sendMore(identity);
                     reply.send(w_router);
@@ -238,7 +236,6 @@ public class Node {
 
                     // Update the timestamp
                     value.setTimeStamp(Instant.parse(request.getProp("timestamp")));
-
                     // May have concurrency issues
                     // TODO: Check if the timestamp is more recent
                     node.database.put(key, value);
@@ -246,7 +243,7 @@ public class Node {
                     kvmsg reply = new kvmsg(0);
                     reply.setKey(WRITE_REP);
                     reply.setProp("db_key", key);
-                    reply.setProp("timestamp", value.getTimeStamp().toString());
+                    reply.setProp("timestamp", value.getInstant().toString());
                     reply.setProp("status", OK);
                     w_router.sendMore(identity);
                     reply.send(w_router);
@@ -274,9 +271,11 @@ public class Node {
     // Thread to handle main communication
     private static class Central extends Thread {
         Object args[];
+
         Central(Object args[]) {
             this.args = args;
         }
+
         @Override
         public void run() {
             Node node = (Node) args[0];
@@ -297,9 +296,11 @@ public class Node {
     // Thread to handle requests
     private static class Worker extends Thread {
         Object args[];
+
         Worker(Object args[]) {
             this.args = args;
         }
+
         @Override
         public void run() {
             Node node = (Node) args[0];
