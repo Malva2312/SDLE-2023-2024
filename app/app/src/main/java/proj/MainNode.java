@@ -72,11 +72,11 @@ public class MainNode {
             kvmsg request = kvmsg.recv(socket);
 
             if (request == null)
-                return -1; // Interrupted
+                return 0; // Interrupted
 
             if (!request.getKey().equals(SNAP)) {
                 System.out.printf("E: bad request: not a snapshot\n");
-                return -1;
+                return 0;
             }
 
             String body = "";
@@ -106,7 +106,7 @@ public class MainNode {
             kvmsg update = kvmsg.recv(socket);
 
             if (update == null)
-                return -1; // Interrupted
+                return 0; // Interrupted
 
             try {
                 if (update.getKey().equals(HEARTBEAT)){

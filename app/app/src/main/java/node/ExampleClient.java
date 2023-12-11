@@ -1,5 +1,6 @@
 package node;
 
+import org.checkerframework.checker.units.qual.s;
 import org.zeromq.SocketType;
 import org.zeromq.ZMQ;
 import org.zeromq.ZContext;
@@ -10,15 +11,27 @@ import java.time.Instant;
 
 public class ExampleClient
 {
-    private final static String SNDR_CLIENT = "/CLIENT/";
-    private final static String SNDR_NODE = "/RING/";
+    // -----------------------------------------------
+    // Constants
+    private final static int MAIN_NODE_PORT = 5556;
+    // -----------------------------------------------
+    // Predifined Messages
+    private final static String SNAP = "SNAP"; // Snapshot Request
+    private final static String SNAP_REP = "SNAP_REP"; // Snapshot Reply
+    private final static String FLUSH = "FLUSH"; // Flush
+    private final static String UPDATE = "UPDATE"; // Update
 
-    private final static String READ_REQ = "READ";
-    private final static String READ_REP = "READREP";
-    private final static String READ_FAIL = "READFAIL";
-    private final static String WRITE_REQ = "WRITE";
-    private final static String WRITE_REP = "WRITEREP";
-    private final static String END_OF_MESSAGE = "ENDOFMESSAGE";
+    private final static String READ = "READ"; // Read
+    private final static String READ_REP = "READ_REP"; // Read Reply
+    private final static String WRITE = "WRITE"; // Write
+    private final static String WRITE_REP = "WRITE_REP"; // Write Reply
+    private final static String OK = "OK"; // OK
+    private final static String FAIL = "FAIL"; // FAIL
+
+    private final static String HEARTBEAT = "HEARTBEAT"; // Heartbeat
+    private final static int HEARTBEAT_INTERVAL = 1000 * 3; // msecs
+    private final static int TTL = HEARTBEAT_INTERVAL * 2; // Heartbeat TTL
+    // -----------------------------------------------
 
     public static void main(String[] args)
     {
@@ -42,84 +55,70 @@ public class ExampleClient
             System.out.println("Connecting to hello world server");
 
             ZMQ.Socket socket1 = ctx.createSocket(SocketType.DEALER);
-            socket1.connect("tcp://localhost:5560");
+            socket1.connect("tcp://localhost:5580");
 
-            //ZMQ.Socket socket2 = ctx.createSocket(SocketType.DEALER);
-            //socket2.connect("tcp://localhost:5571");
+            // Try to write to the database
+            String key = "unique_id_123";
 
-            kvmsg msg = new kvmsg(0);
-            msg.setKey(WRITE_REQ);
-            //msg.setProp("db_key", "unique_id_123");
-            msg.setProp("sender", SNDR_CLIENT);
-            msg.setProp("timestamp", "%s", shopList.getInstant().toString());
-
-            msg.setProp("items", Integer.toString(shopList.getItems().size()));
-
-            String items = "";
-            for (String item : shopList.getItems().keySet()) {
-                items += item + "\n";
-                items += Integer.toString(shopList.getItems().get(item).getQuantity()) + "\n";
-            }
-            msg.fmtBody("%s", items);
+            // BEGIN WRITE
+            kvmsg msg = new kvmsg( 0);
+            msg.setKey(WRITE);
+            msg.setProp("db_key", key);
+            msg.setProp("size", Integer.toString(shopList.getItems().size()));
+            msg.setProp("timestamp", shopList.getInstant().toString());
+            String serialized = ShopList.serialize(shopList);
+            msg.fmtBody("%s",serialized);            
             msg.send(socket1);
-
-
-            // Wait for the reply
-
-            System.out.println("Waiting for WRITE reply");
-            kvmsg reply;
-            reply = kvmsg.recv(socket1);
-            System.out.println("Received reply " + reply.getKey() + " " + reply.getProp("status"));
-
-
-            // REQUEST READ
-            msg = new kvmsg(0);
-            msg.setKey(READ_REQ);
-            msg.setProp("db_key", "unique_id_123");
-            msg.setProp("sender", SNDR_CLIENT);
-
-            msg.send(socket1);
-
-
-            // SLEEP
-            try {
-                Thread.sleep(1000);
-            } catch (InterruptedException e) {
-                e.printStackTrace();
-            }
-
-            // Wait for the reply
-            System.out.println("Waiting for READ reply");
-            reply = kvmsg.recv(socket1);
-
-
+            // Receive the reply
+            kvmsg reply = kvmsg.recv(socket1);
+            System.out.println("Received reply");
             if (reply == null) {
-                System.out.println("No reply");
+                System.out.println("Failed to receive reply");
                 return;
             }
-            if (reply.getProp("status").equals(READ_FAIL)){
-                System.out.println("Read failed");
+            // Check status of the reply
+            if (reply.getKey().equals(OK)) {
+                reply.dump();
+            }
+            else {
+                System.out.println("Failed to write to database");
+            }
+
+
+
+            // Send a read request
+            msg = new kvmsg( 0);
+            msg.setKey(READ);
+            msg.setProp("db_key", key);
+            msg.send(socket1);
+            // Receive the reply
+            reply = kvmsg.recv(socket1);
+            System.out.println("Received reply");
+            if (reply == null) {
+                System.out.println("Failed to receive reply");
                 return;
             }
-
-            ShopList rcv = new ShopList();
-            rcv.setTimeStamp(Instant.parse(reply.getProp("timestamp")));
-
-            
-            String db_key = reply.getProp("db_key");
-            int items_count = Integer.parseInt(reply.getProp("items"));
-            String[] list_items = new String(reply.body(), ZMQ.CHARSET).split("\n");
-
-            for (int i = 0; i < items_count; i++) {
-                String item_name = list_items[i*2];
-                int item_quantity = Integer.parseInt(list_items[i*2 + 1]);
-                rcv.addItem(item_name, 0.0, item_quantity);
+            // Check status of the reply
+            if (reply.getKey().equals(OK)) {
+                reply.dump();
             }
+            else {
+                System.out.println("Failed to read from database");
+            }
+            // END OF READ
 
-            System.out.println("Received reply " + reply.getKey() + " " + reply.getProp("status"));
-            rcv.displayItems();
+            // From the reply, get the serialized shop list
 
+            // Deserialize the shop list
+            String body = new String(reply.body(), ZMQ.CHARSET);
+            ShopList shopList2 = ShopList.deserialize(body);
 
+            shopList.setTimeStamp(Instant.parse(reply.getProp("timestamp")));
+
+            System.out.println(shopList2.getInstant());
+            System.out.println(shopList2.getTotalPrice());
+            shopList2.displayItems();
         }
+        
     }
 }
