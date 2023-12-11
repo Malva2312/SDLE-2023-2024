@@ -38,10 +38,9 @@ public class Node {
     // -----------------------------------------------
     // Communication Channels
     private ZContext ctx;
-    private ZLoop loop;
 
-    private int port = 5580;
-    private long token = 0;
+    private int port = 5580; // Default port
+    private long token = 0; // Default token
     private long sequence = 0;
 
     private Socket snapshot; // Sends snapshot request
@@ -324,7 +323,6 @@ public class Node {
         this.port = port;
         // Create the context and sockets
         ctx = new ZContext();
-        loop = new ZLoop(ctx);
 
         // Connect to the main node
         snapshot = ctx.createSocket(SocketType.DEALER);
@@ -346,9 +344,6 @@ public class Node {
     // Run the node
     private void run() {
         snapshot();
-
-        // Create the threads
-        ctx = new ZContext();
 
         // Assert threads to variables
         Central central = new Central(new Object[] { this });

@@ -189,14 +189,6 @@ public class MainNode {
 
     // Run the node
     private void run() {
-        // TEST
-        Node node = new Node(0L, 5556, System.currentTimeMillis() + 5000);
-        System.out.println(node.toString());
-        hashring.put(node.token, node);
-        Node other_node = new Node(3L, 5557, 0);
-        System.out.println(other_node.toString());
-        hashring.put(other_node.token, other_node);
-
         // Main loop to communicate with nodes
         PollItem snapshotItem = new PollItem(snapshot, ZMQ.Poller.POLLIN);
         loop.addPoller(snapshotItem, new Snapshot(), this);
