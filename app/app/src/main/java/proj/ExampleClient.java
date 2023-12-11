@@ -1,5 +1,3 @@
-package node;
-
 import org.checkerframework.checker.units.qual.s;
 import org.zeromq.SocketType;
 import org.zeromq.ZMQ;
@@ -69,7 +67,7 @@ public class ExampleClient
             String serialized = ShopList.serialize(shopList);
             msg.fmtBody("%s",serialized);            
             
-            /* msg.send(socket1);
+            msg.send(socket1);
             // Receive the reply
             kvmsg reply = kvmsg.recv(socket1);
             System.out.println("Received write reply");
@@ -85,7 +83,7 @@ public class ExampleClient
                 System.out.println("Status: " + reply.getProp("status"));
                 System.out.println("Failed to write to database");
             }
-            */
+            // END OF WRITE
 
 
             // Send a read request
@@ -95,7 +93,7 @@ public class ExampleClient
             msg.setProp("db_key", key);
             msg.send(socket1);
             // Receive the reply
-            kvmsg reply = kvmsg.recv(socket1);
+            reply = kvmsg.recv(socket1);
             System.out.println("Received read reply");
             if (reply == null) {
                 System.out.println("Failed to receive reply");
