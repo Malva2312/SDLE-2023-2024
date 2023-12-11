@@ -1,4 +1,4 @@
-package proj;
+package node;
 
 import org.zeromq.SocketType;
 import org.zeromq.ZContext;
