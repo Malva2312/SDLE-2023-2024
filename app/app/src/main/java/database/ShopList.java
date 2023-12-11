@@ -135,6 +135,11 @@ public void displayItems() {
         return shopList;
     }
     public static ShopList merge(ShopList shopList1, ShopList shopList2){
+        if (shopList1 == null) {
+            return shopList2;
+        }else if (shopList2 == null) {
+            return shopList1;
+        }
         ShopList merged = shopList1.copy();
         for (Item item : shopList2.items.values()) {
             if (merged.items.containsKey(item.getName())) {

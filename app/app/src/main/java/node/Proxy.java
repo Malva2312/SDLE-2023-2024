@@ -13,6 +13,8 @@ import org.zeromq.ZMQ;
 import org.zeromq.ZMQ.PollItem;
 import org.zeromq.ZMQ.Socket;
 
+import database.ShopList;
+
 public class Proxy {
     // -----------------------------------------------
     // Constants
@@ -265,10 +267,7 @@ public class Proxy {
                                         readQuorum--;
                                     }
                                 }
-                            } else {
-                                // Resend request
-                                threads.get(idx).start();
-                            }
+                            } 
                         }
                     }
                 }
@@ -276,16 +275,53 @@ public class Proxy {
 
                 // Solve conflicts
                 if (reply[0] != null) {
-                    tokenThread.node.router.sendMore(identity);
-                    reply[0].send(tokenThread.node.router);
-                }
-                else {
+                    List<ShopList> shopLists = new ArrayList<ShopList>();
+
+                    for (int i = 0; i < reply.length; i++) {
+                        if (reply[i] != null) {
+                            if (reply[i].getKey().equals(READ_REP)) {
+                                if (reply[i].getProp("status").equals(OK)) {
+                                    ShopList l = reply[i].getShopList();
+                                    shopLists.add(l);
+                                }
+                            }
+                        }
+                    }
+                    // Merge the shop lists
+                    ShopList shopList = null;
+                    for (int i = 0; i < shopLists.size(); i++) {
+                        shopList = ShopList.merge(shopList, shopLists.get(i));
+                    }
+                    if (shopList != null) {
+                        // Send the reply
+                        kvmsg replyMsg = new kvmsg(0);
+                        replyMsg.setKey(READ_REP);
+                        replyMsg.setProp("status", OK);
+                        replyMsg.setProp("timestamp", shopList.getInstant().toString());
+                        replyMsg.setProp("db_key", request.getProp("db_key"));
+                        String serialized = ShopList.serialize(shopList);
+                        replyMsg.fmtBody("%s", serialized);
+                        tokenThread.node.router.sendMore(identity);
+                        replyMsg.send(tokenThread.node.router);
+                    }
+                    else {
+                        System.out.println("E: no reply from self");
+
+                        kvmsg replyMsg = new kvmsg(0);
+                        replyMsg.setKey(READ_REP);
+                        replyMsg.setProp("status", FAIL);
+                        replyMsg.setProp("db_key", request.getProp("db_key"));
+
+                        tokenThread.node.router.sendMore(identity);
+                        replyMsg.send(tokenThread.node.router);
+                    }
+
+                } else {
                     System.out.println("E: no reply from self");
 
                     kvmsg replyMsg = new kvmsg(0);
                     replyMsg.setKey(READ_REP);
                     replyMsg.setProp("status", FAIL);
-                    replyMsg.setProp("timestamp", "");
                     replyMsg.setProp("db_key", request.getProp("db_key"));
 
                     tokenThread.node.router.sendMore(identity);
@@ -398,6 +434,7 @@ public class Proxy {
                 if (identity == null)
                     break; // Interrupted
                 kvmsg request = kvmsg.recv(node.router);
+
                 if (request == null)
                     break; // Interrupted
                 if (node.hashring.isEmpty()) {
@@ -410,6 +447,16 @@ public class Proxy {
                     node.router.sendMore(identity);
                     replyMsg.send(node.router);
     
+                    continue;
+                }
+                if (!request.getKey().equals(READ) && !request.getKey().equals(WRITE)) {
+                    System.out.println("E: bad request: not a read/write request");
+                    kvmsg replyMsg = new kvmsg(0);
+                    replyMsg.setKey(request.getKey() + "_REP");
+                    replyMsg.setProp("status", FAIL);
+
+                    node.router.sendMore(identity);
+                    replyMsg.send(node.router);
                     continue;
                 }
                 String key = request.getProp("db_key");

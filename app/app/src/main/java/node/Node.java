@@ -206,13 +206,15 @@ public class Node {
                     ShopList value = ShopList.deserialize(body); // Items
 
                     // Update the timestamp
-                    System.out.println("HERE");
-                    request.dump();
                     String timestamp = request.getProp("timestamp");
                     System.out.println(timestamp);
                     value.setTimeStamp(Instant.parse(timestamp));
-                    // May have concurrency issues
-                    // TODO: Check if the timestamp is more recent
+                    
+                    // Read the current value
+                    ShopList currentValue = node.database.containsKey(key) ? (ShopList) node.database.get(key) : null;
+                    value = ShopList.merge(currentValue, value);
+                    
+                    // Update the database
                     node.database.put(key, value);
                     System.out.println("Updated database on key " + key);
 

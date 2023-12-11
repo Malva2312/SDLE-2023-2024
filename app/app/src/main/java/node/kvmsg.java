@@ -9,6 +9,8 @@ import java.util.UUID;
 import org.zeromq.ZMQ;
 import org.zeromq.ZMQ.Socket;
 
+import database.ShopList;
+
 public class kvmsg
 {
     //  Keys are short strings
@@ -315,4 +317,17 @@ public class kvmsg
     }
 
     //  .until
+
+
+
+    public ShopList getShopList() {
+        try {
+            ShopList list = ShopList.deserialize(new String(body(), ZMQ.CHARSET));
+            list.setTimeStamp(java.time.Instant.parse(getProp("timestamp")));
+            return list;
+        }
+        catch (Exception e) {
+            return null;
+        }
+    }
 }
