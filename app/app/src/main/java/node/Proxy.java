@@ -328,7 +328,6 @@ public class Proxy {
                 }
                 System.out.println("END of WRIE loop");
 
-
                 // Solve conflicts
                 if (reply[0] != null) {
                     tokenThread.node.router.sendMore(identity);

@@ -22,6 +22,7 @@ public class ShopList {
         for (Item item : items.values()) {
             copy.addItem(item.getName(), item.getPrice(), item.getQuantity());
         }
+        copy.setTimeStamp(lastUpdated);
         return copy;
     }
 
@@ -51,12 +52,8 @@ public class ShopList {
     // Update the quantity of an item
     public void updateQuantity(String name, int newQuantity) {
         Item item = items.get(name);
-        if (newQuantity <= 0) {
-            removeItem(name);
-        }
-        else {
-            item.setQuantity(newQuantity);
-        }
+        item.setQuantity(newQuantity);
+
     }
 
     public String getTimeStamp() {
@@ -94,6 +91,9 @@ public void displayItems() {
 
         // Print the sorted items
         for (Item item : itemList) {
+            if (item.getQuantity() < 1) {
+                continue;
+            }
             System.out.println(item.toString());
         }
 
@@ -133,6 +133,25 @@ public void displayItems() {
             shopList.addItem(item[0], Integer.parseInt(item[1]));
         }
         return shopList;
+    }
+    public static ShopList merge(ShopList shopList1, ShopList shopList2){
+        ShopList merged = shopList1.copy();
+        for (Item item : shopList2.items.values()) {
+            if (merged.items.containsKey(item.getName())) {
+                // Make decision on which item to keep based on shopList timestamp
+                if (shopList2.getInstant().isAfter(shopList1.getInstant())) {
+                    merged.updateQuantity(item.getName(), item.getQuantity());
+                }
+            }
+            else {
+                merged.addItem(item.getName(), item.getQuantity());
+            }
+        }
+        // Set the timestamp to the latest timestamp
+        if (shopList2.getInstant().isAfter(shopList1.getInstant())) {
+            merged.setTimeStamp(shopList2.getInstant());
+        }
+        return merged;
     }
 
     public static void main(String[] args) {
