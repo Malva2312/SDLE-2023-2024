@@ -121,7 +121,13 @@ public void displayItems() {
     }
     public static ShopList deserialize(String serialized){
         ShopList shopList = new ShopList();
+        if (serialized == null || serialized.isEmpty()) {
+            return shopList;
+        }
         String[] lines = serialized.split("\n");
+        if (lines.length == 0) {
+            return shopList;
+        }
         for (String line : lines) {
             String[] item = line.split(",");
             shopList.addItem(item[0], Integer.parseInt(item[1]));

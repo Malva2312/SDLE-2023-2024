@@ -10,6 +10,7 @@ import org.zeromq.ZMQ.Socket;
 
 import database.KeyValueDatabase;
 import database.ShopList;
+import node.LoadBalancer;
 
 import java.time.Instant;
 import java.util.concurrent.*;
@@ -17,6 +18,7 @@ import java.util.concurrent.*;
 public class Proxy {
     // -----------------------------------------------
     // Constants
+    private final static int PROXY_PORT = 5555;
     private final static int MAIN_NODE_PORT = 5556;
     // -----------------------------------------------
     // Predifined Messages
@@ -39,7 +41,6 @@ public class Proxy {
     // Communication Channels
     private ZContext ctx;
 
-    private final int port = 5555; // Default port
     private long sequence = 0;
 
     private Socket snapshot; // Sends snapshot request
@@ -52,7 +53,6 @@ public class Proxy {
     private static boolean token_status = true;
     private static boolean health_status = false;
 
-    // -----------------------------------------------
     // -----------------------------------------------
     // Request memory snapshot from main node
     private void snapshot() {
@@ -151,6 +151,32 @@ public class Proxy {
     }
 
     // -----------------------------------------------
+    // Handle requests from clients
+    private static class HandleRequest implements IZLoopHandler {
+        @Override
+        public int handle(ZLoop loop, PollItem item, Object arg) {
+            Proxy node = (Proxy) arg;
+            byte[] identity = item.getSocket().recv(0);
+            if (identity == null)
+                return 0; // Interrupted
+            kvmsg request = kvmsg.recv(item.getSocket());
+            if (request == null)
+                return 0; // Interrupted
+            
+            if (request.getKey().equals(READ)) {
+
+            }
+            else if (request.getKey().equals(WRITE)) {
+
+            }
+            else {
+                System.out.println("E: bad request: not a read or write");
+                return 0;
+            }
+            return 0;
+        }
+    }
+    // -----------------------------------------------
     // Thread to handle main communication
     private static class Central extends Thread {
         Object args[];
@@ -173,7 +199,24 @@ public class Proxy {
             loop.start();
         }
     }
+    // Main Worker
+    private static class MainWorker extends Thread{
+        Proxy node;
+        Socket router;
+        MainWorker(Proxy node){
+            this.node = node;
+        }
+        @Override
+        public void run(){
+            ZLoop loop = new ZLoop(node.ctx);
+            router = node.ctx.createSocket(SocketType.ROUTER);
+            router.bind("tcp://*:" + PROXY_PORT);
 
+            PollItem routerItem = new PollItem(router, ZMQ.Poller.POLLIN);
+            loop.addPoller(routerItem, new HandleRequest(), node);
+            loop.start();
+        }
+    }
     // -----------------------------------------------
     // Constructor
     Proxy() {
@@ -187,6 +230,7 @@ public class Proxy {
         // Connect to the main node
         snapshot.connect("tcp://localhost:" + MAIN_NODE_PORT);
         subscriber.connect("tcp://localhost:" + (MAIN_NODE_PORT + 1));
+        subscriber.subscribe(ZMQ.SUBSCRIPTION_ALL);
 
         // Initialize the hash ring
         hashring = new ConcurrentHashMap<Long, Integer>();

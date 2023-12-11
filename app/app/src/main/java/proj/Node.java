@@ -355,10 +355,18 @@ public class Node {
 
         // Wait for the threads to finish
         try {
-            central.join();
-            worker.join();
-        } catch (InterruptedException e) {
-            e.printStackTrace();
+            while (central.isAlive() && worker.isAlive()) {
+                // Wait for one of the threads to finish
+            }
+            // kill the other thread
+            if (central.isAlive()) {
+                central.interrupt();
+            } else if (worker.isAlive()) {
+                worker.interrupt();
+            }
+            ctx.close();
+        } catch (Exception e) {
+            e.getStackTrace();
         }
     }
 
