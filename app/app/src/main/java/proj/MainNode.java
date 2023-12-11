@@ -12,7 +12,6 @@ import org.zeromq.ZMQ;
 import org.zeromq.ZMQ.PollItem;
 import org.zeromq.ZMQ.Socket;
 
-import guide.kvmsg;
 
 public class MainNode {
     // -----------------------------------------------
