@@ -42,7 +42,6 @@ public class Node {
     private long token = 0; // Default token
     private long sequence = 0;
 
-    private Socket snapshot; // Sends snapshot request
     private Socket subscriber; // Collects hash ring updates
     private Socket pusher; // Publishes heartbeats
 
@@ -305,10 +304,8 @@ public class Node {
         ctx = new ZContext();
 
         // Connect to the main node
-        snapshot = ctx.createSocket(SocketType.DEALER);
         subscriber = ctx.createSocket(SocketType.SUB);
         pusher = ctx.createSocket(SocketType.PUSH);
-        snapshot.connect("tcp://localhost:" + (MAIN_NODE_PORT));
         subscriber.connect("tcp://localhost:" + (MAIN_NODE_PORT + 1));
         subscriber.subscribe(ZMQ.SUBSCRIPTION_ALL);
         pusher.connect("tcp://localhost:" + (MAIN_NODE_PORT + 2));
@@ -323,7 +320,6 @@ public class Node {
 
     // Run the node
     private void run() {
-        //snapshot();
 
         // Assert threads to variables
         Central central = new Central(new Object[] { this });
