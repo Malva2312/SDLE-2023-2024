@@ -1,9 +1,9 @@
 package app;
 
-import database.KeyValueDatabase;
 import database.ShopList;
 
 import java.util.Scanner;
+import java.time.Instant;
 
 public class App {
     private Backend backend; 
@@ -97,6 +97,7 @@ public class App {
 
         ShopList shopList = backend.getShopList(key);
         shopList.addItem(itemName, quantity);
+        shopList.setTimeStamp(Instant.now());
         shopList = backend.setShopList(key, shopList);
         System.out.println("Item '" + itemName + "' added to the shopping list.");
     }
@@ -117,6 +118,7 @@ public class App {
         int newQuantity = shopList.getItems().get(itemName).getQuantity() - quantity;
 
         shopList.updateQuantity(itemName, newQuantity);
+        shopList.setTimeStamp(Instant.now());
         shopList = backend.setShopList(key, shopList);
         System.out.println("\nItem '" + itemName + "' x" + quantity +" removed from the shopping list.");
         }
