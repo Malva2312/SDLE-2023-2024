@@ -97,7 +97,7 @@ public class Node {
                         node.hashring.remove(token);
                         System.out.println("Removed node " + token + " from the hash ring");
                     } else {
-                        System.out.println("E: token does not exist");
+                        System.out.println("E: token does not exist: " + token);
                         return 0;
                     }
                 } catch (Exception e) {
