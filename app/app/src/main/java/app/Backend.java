@@ -60,14 +60,13 @@ public class Backend {
                 // Receive the reply
                 kvmsg reply = kvmsg.recv(socket);
                 if (reply == null) {
-                    System.out.println("No response from server");
+                    //System.out.println("No response from server");
                     return;
                 } else if (!reply.getProp("status").equals(OK)) {
-                    System.out.println("HERE");
-                    System.out.println("Error: " + reply.getProp("status"));
+                    //System.out.println("Error: " + reply.getProp("status"));
                     return;
                 } else if (!reply.getKey().equals(READ_REP)) {
-                    System.out.println("Unexpected reply from server: " + reply.getKey());
+                    //System.out.println("Unexpected reply from server: " + reply.getKey());
                     return;
                 } else {
                     // Deserialize the shopping list
@@ -88,17 +87,17 @@ public class Backend {
                     }
                 }
             } catch (ZMQException e) {
-                // System.out.println("Error: " + e.getMessage());
+                //System.out.println("Error: " + e.getMessage());
                 if (Thread.interrupted()) {
                     // We were interrupted, so we can exit
                     socket.close();
                     return;
                 } else {
                     // Handle other ZMQExceptions
-                    e.printStackTrace();
+                    //e.printStackTrace();
                 }
             } catch (Exception e) {
-                e.printStackTrace();
+                //e.printStackTrace();
             }
         }
     }
@@ -139,13 +138,14 @@ public class Backend {
                 // Receive the reply
                 kvmsg reply = kvmsg.recv(socket);
                 if (reply == null) {
-                    System.out.println("No response from server");
+                    //System.out.println("No response from server");
                     return;
                 } else if (!reply.getProp("status").equals(OK)) {
-                    System.out.println("Error: " + reply.getProp("status"));
+                    backend.shoppingLists.put(key, shopList);
+                    //System.out.println("Error: " + reply.getProp("status"));
                     return;
                 } else if (!reply.getKey().equals(WRITE_REP)) {
-                    System.out.println("Unexpected reply from server: " + reply.getKey());
+                    //System.out.println("Unexpected reply from server: " + reply.getKey());
                     return;
                 } else {
                     // Get the timestamp from the reply
@@ -165,17 +165,17 @@ public class Backend {
                     }
                 }
             } catch (ZMQException e) {
-                // System.out.println("Error: " + e.getMessage());
+                //System.out.println("Error: " + e.getMessage());
                 if (Thread.interrupted()) {
                     // We were interrupted, so we can exit
                     socket.close();
                     return;
                 } else {
                     // Handle other ZMQExceptions
-                    e.printStackTrace();
+                    //e.printStackTrace();
                 }
             } catch (Exception e) {
-                e.printStackTrace();
+                //e.printStackTrace();
             }
         }
     }
@@ -201,6 +201,7 @@ public class Backend {
         while (writeRequest.isAlive()) {
             if (System.currentTimeMillis() > timeout) {
                 writeRequest.interrupt();
+                this.shoppingLists.put(key, shopList);
             }
         }
         return this.shoppingLists.hasKey(key) ? (ShopList) shoppingLists.get(key) : new ShopList();
