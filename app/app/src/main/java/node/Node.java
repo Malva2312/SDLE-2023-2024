@@ -10,6 +10,7 @@ import org.zeromq.ZMQ.Socket;
 
 import database.KeyValueDatabase;
 import database.ShopList;
+import node.helper.kvmsg;
 
 import java.time.Instant;
 import java.util.concurrent.*;
@@ -151,7 +152,7 @@ public class Node {
     private static class DataRequests implements IZLoopHandler {
         @Override
         public int handle(ZLoop loop, PollItem item, Object arg) {
-            System.out.println("Handling data request");
+            //System.out.println("Handling data request");
             Node node = (Node) arg;
             Socket w_router = item.getSocket();
 

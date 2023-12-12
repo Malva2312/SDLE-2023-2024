@@ -56,9 +56,6 @@ public class ShopList {
 
     }
 
-    public String getTimeStamp() {
-        return formatTimeStamp();
-    }
     public Instant getInstant() {
         return lastUpdated;
     }

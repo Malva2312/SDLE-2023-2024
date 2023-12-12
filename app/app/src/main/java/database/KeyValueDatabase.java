@@ -1,12 +1,17 @@
 package database;
 
-import java.util.HashMap;
+import java.util.concurrent.*;
 
 public class KeyValueDatabase {
-    private HashMap<String, Object> database;
+    private ConcurrentHashMap<String, Object> database;
 
     public KeyValueDatabase() {
-        this.database = new HashMap<>();
+        this.database = new ConcurrentHashMap<>();
+    }
+
+    // Check if key is present in the database
+    public boolean hasKey(String key) {
+        return database.containsKey(key);
     }
 
     // Put a key-value pair into the database

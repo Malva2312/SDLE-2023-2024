@@ -1,4 +1,4 @@
-package node;
+package node.helper;
 
 import org.zeromq.SocketType;
 import org.zeromq.ZMQ;
@@ -29,7 +29,7 @@ public class ExampleClient
         KeyValueDatabase database = new KeyValueDatabase();
         database.put("unique_id_123", shopList);
 
-        shopList.addItem("apple", 1.99, 2);
+        shopList.addItem("apple", 1.99, 0);
         shopList.addItem("banana", 0.99, 3);
         shopList.addItem("orange", 1.49, 1);
         shopList.addItem("pear", 1.99, 2);
@@ -50,7 +50,7 @@ public class ExampleClient
             String key = "unique_id_123";
             // BEGIN WRITE
             kvmsg msg = new kvmsg( 0);
-            msg.setKey(WRITE);
+            msg.setKey("error");
             msg.setProp("db_key", key);
             msg.setProp("size", Integer.toString(shopList.getItems().size()));
             msg.setProp("timestamp", shopList.getInstant().toString());

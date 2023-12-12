@@ -6,17 +6,19 @@ import database.ShopList;
 import java.util.Scanner;
 
 public class App {
-    private static KeyValueDatabase shoppingLists = new KeyValueDatabase();
-    private static Scanner scanner = new Scanner(System.in);
-
-    public static void main(String[] args) {
+    private Backend backend; 
+    private Scanner scanner;
+    App(){
+        backend = new Backend();
+        scanner = new Scanner(System.in);
+    }
+    void run(){
         System.out.println("Welcome to the Shopping List App!");
 
         while (true) {
             System.out.println("\nMenu:");
             System.out.println("1. Manage a shopping list");
-            System.out.println("2. Remove a shopping list");
-            System.out.println("3. Exit");
+            System.out.println("2. Exit");
 
             System.out.print("Enter your choice: ");
             int choice = scanner.nextInt();
@@ -27,9 +29,6 @@ public class App {
                     manageShoppingList();
                     break;
                 case 2:
-                    removeShoppingList();
-                    break;
-                case 3:
                     System.out.println("\nExiting the Shopping List App. Goodbye!\n");
                     scanner.close();
                     System.exit(0);
@@ -38,36 +37,28 @@ public class App {
             }
         }
     }
+    public static void main(String[] args) {
+        App app = new App();
+        app.run();
+    }
 
-    private static void manageShoppingList() {
+    private void manageShoppingList() {
         System.out.print("\nEnter the ID of the shopping list to manage: ");
         String listId = scanner.nextLine();
 
-        ShopList shopList = (ShopList) shoppingLists.get(listId);
+        ShopList shopList =  backend.getShopList(listId);
 
         if (shopList == null) {
             // If the shopping list doesn't exist, create a new one
             shopList = new ShopList();
-            shoppingLists.put(listId, shopList);
+            backend.setShopList(listId, shopList);
             System.out.println("\nNew shopping list created with ID: " + listId);
         }
 
-        shopListMenu(shopList);
+        shopListMenu(listId);
     }
 
-    private static void removeShoppingList() {
-        System.out.print("\nEnter the ID of the shopping list to remove: ");
-        String listId = scanner.nextLine();
-
-        if (shoppingLists.containsKey(listId)) {
-            shoppingLists.remove(listId);
-            System.out.println("\nShopping list with ID '" + listId + "' removed successfully.");
-        } else {
-            System.out.println("Shopping list with ID '" + listId + "' not found.");
-        }
-    }
-
-    private static void shopListMenu(ShopList shopList) {
+    private void shopListMenu(String key) {
         while (true) {
             System.out.println("\nShopping List Menu:");
             System.out.println("1. Add an item");
@@ -81,13 +72,13 @@ public class App {
 
             switch (choice) {
                 case 1:
-                    addItemToShopList(shopList);
+                    addItemToShopList(key);
                     break;
                 case 2:
-                    removeItemFromShopList(shopList);
+                    removeItemFromShopList(key);
                     break;
                 case 3:
-                    shopList.displayItems();
+                    backend.getShopList(key).displayItems();
                     break;
                 case 4:
                     return; // Exit the shop list menu
@@ -97,21 +88,24 @@ public class App {
         }
     }
 
-    private static void addItemToShopList(ShopList shopList) {
+    private void addItemToShopList(String key) {
         System.out.print("\nEnter the name of the item: ");
         String itemName = scanner.nextLine();
 
         System.out.print("\nEnter the quantity of the item: ");
         int quantity = scanner.nextInt();
 
+        ShopList shopList = backend.getShopList(key);
         shopList.addItem(itemName, quantity);
+        shopList = backend.setShopList(key, shopList);
         System.out.println("Item '" + itemName + "' added to the shopping list.");
     }
 
-    private static void removeItemFromShopList(ShopList shopList) {
+    private void removeItemFromShopList(String key) {
         System.out.print("\nEnter the name of the item to remove: ");
         String itemName = scanner.nextLine();
 
+        ShopList shopList = backend.getShopList(key);
         if (!shopList.getItems().containsKey(itemName)) {
             System.out.println("\nItem '" + itemName + "' not found in the shopping list.");
             return;
@@ -123,6 +117,7 @@ public class App {
         int newQuantity = shopList.getItems().get(itemName).getQuantity() - quantity;
 
         shopList.updateQuantity(itemName, newQuantity);
+        shopList = backend.setShopList(key, shopList);
         System.out.println("\nItem '" + itemName + "' x" + quantity +" removed from the shopping list.");
         }
     }

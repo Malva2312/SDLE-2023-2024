@@ -14,6 +14,8 @@ import org.zeromq.ZMQ.PollItem;
 import org.zeromq.ZMQ.Socket;
 
 import database.ShopList;
+import node.helper.ByteToString;
+import node.helper.kvmsg;
 
 public class Proxy {
     // -----------------------------------------------
